@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -82,13 +83,17 @@ function AvatarStack({
   );
 }
 
-function SmallButtons({ left, right }: { left: string; right: string }) {
+function SmallButtons({
+  left, right, onLeftPress, onRightPress,
+}: {
+  left: string; right: string; onLeftPress?: () => void; onRightPress?: () => void;
+}) {
   return (
     <View style={s.btnPair}>
-      <TouchableOpacity style={s.btnGhost} activeOpacity={0.7}>
+      <TouchableOpacity style={s.btnGhost} activeOpacity={0.7} onPress={onLeftPress}>
         <Text style={s.btnGhostText}>{left}</Text>
       </TouchableOpacity>
-      <TouchableOpacity style={s.btnSolid} activeOpacity={0.7}>
+      <TouchableOpacity style={s.btnSolid} activeOpacity={0.7} onPress={onRightPress}>
         <Text style={s.btnSolidText}>{right}</Text>
       </TouchableOpacity>
     </View>
@@ -96,6 +101,7 @@ function SmallButtons({ left, right }: { left: string; right: string }) {
 }
 
 function HostingCard({ round }: { round: (typeof HOSTING)[number] }) {
+  const router = useRouter();
   return (
     <Card>
       <View style={s.cardTop}>
@@ -106,23 +112,33 @@ function HostingCard({ round }: { round: (typeof HOSTING)[number] }) {
       </View>
       <Text style={s.meta}>{round.meta}</Text>
       <AvatarStack players={round.players} openSpots={round.openSpots} />
-      <SmallButtons left="💬 Message" right="Manage →" />
+      <SmallButtons
+        left="💬 Message"
+        right="Manage →"
+        onRightPress={() => router.push(`/scorecard/${round.id}`)}
+      />
     </Card>
   );
 }
 
 function ConfirmedCard({ round }: { round: (typeof CONFIRMED)[number] }) {
+  const router = useRouter();
   return (
     <Card style={{ opacity: 0.88 }}>
       <Text style={[s.courseName, { marginBottom: 5 }]}>{round.course}</Text>
       <Text style={s.meta}>{round.meta}</Text>
       <AvatarStack players={round.players} />
-      <SmallButtons left="💬 Message" right="View →" />
+      <SmallButtons
+        left="💬 Message"
+        right="View →"
+        onRightPress={() => router.push(`/scorecard/${round.id}`)}
+      />
     </Card>
   );
 }
 
 function AwaitingCard({ round }: { round: (typeof AWAITING)[number] }) {
+  const router = useRouter();
   return (
     <Card style={{ opacity: 0.72 }}>
       <View style={s.cardTop}>
@@ -131,13 +147,13 @@ function AwaitingCard({ round }: { round: (typeof AWAITING)[number] }) {
       </View>
       <Text style={s.meta}>{round.meta}</Text>
       <View style={s.rsvpRow}>
-        <TouchableOpacity style={s.rsvpIn} activeOpacity={0.7}>
+        <TouchableOpacity style={s.rsvpIn} activeOpacity={0.7} onPress={() => router.push(`/invite/${round.id}`)}>
           <Text style={s.rsvpInText}>I'm in</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={s.rsvpMaybe} activeOpacity={0.7}>
+        <TouchableOpacity style={s.rsvpMaybe} activeOpacity={0.7} onPress={() => router.push(`/invite/${round.id}`)}>
           <Text style={s.rsvpMaybeText}>Maybe</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={s.rsvpOut} activeOpacity={0.7}>
+        <TouchableOpacity style={s.rsvpOut} activeOpacity={0.7} onPress={() => router.push(`/invite/${round.id}`)}>
           <Text style={s.rsvpOutText}>Can't go</Text>
         </TouchableOpacity>
       </View>
@@ -170,17 +186,17 @@ export default function HomeScreen() {
         contentContainerStyle={s.content}
         showsVerticalScrollIndicator={false}
       >
-        <SectionLabel label="Hosting" />
+        <SectionLabel label="You're running this 🎙️" />
         {HOSTING.map((r) => (
           <HostingCard key={r.id} round={r} />
         ))}
 
-        <SectionLabel label="You're in" />
+        <SectionLabel label="Locked in 🤝" />
         {CONFIRMED.map((r) => (
           <ConfirmedCard key={r.id} round={r} />
         ))}
 
-        <SectionLabel label="Awaiting reply" />
+        <SectionLabel label="Your move 👀" />
         {AWAITING.map((r) => (
           <AwaitingCard key={r.id} round={r} />
         ))}

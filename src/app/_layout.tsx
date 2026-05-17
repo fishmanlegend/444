@@ -39,6 +39,9 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="create" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="invite/[id]" />
+        <Stack.Screen name="scorecard/[id]" />
+        <Stack.Screen name="post-round/[id]" />
       </Stack>
     </SafeAreaProvider>
   );

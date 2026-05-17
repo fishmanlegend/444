@@ -5,13 +5,14 @@ import { Colors } from '@/constants/theme';
 import { Wordmark } from './Wordmark';
 
 interface TopBarProps {
+  left?: React.ReactNode;
   right?: React.ReactNode;
 }
 
-export function TopBar({ right }: TopBarProps) {
+export function TopBar({ left, right }: TopBarProps) {
   return (
     <View style={s.bar}>
-      <Wordmark />
+      {left ?? <Wordmark />}
       <View style={s.spacer} />
       {right}
     </View>
