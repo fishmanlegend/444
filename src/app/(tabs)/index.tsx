@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Avatar } from '@/components/Avatar';
 import { Card } from '@/components/Card';
@@ -115,6 +115,7 @@ function HostingCard({ round }: { round: (typeof HOSTING)[number] }) {
       <SmallButtons
         left="💬 Message"
         right="Manage →"
+        onLeftPress={() => Alert.alert('Group chat', 'Messaging is coming soon.')}
         onRightPress={() => router.push(`/scorecard/${round.id}`)}
       />
     </Card>
@@ -131,6 +132,7 @@ function ConfirmedCard({ round }: { round: (typeof CONFIRMED)[number] }) {
       <SmallButtons
         left="💬 Message"
         right="View →"
+        onLeftPress={() => Alert.alert('Group chat', 'Messaging is coming soon.')}
         onRightPress={() => router.push(`/scorecard/${round.id}`)}
       />
     </Card>
@@ -140,20 +142,20 @@ function ConfirmedCard({ round }: { round: (typeof CONFIRMED)[number] }) {
 function AwaitingCard({ round }: { round: (typeof AWAITING)[number] }) {
   const router = useRouter();
   return (
-    <Card style={{ opacity: 0.72 }}>
+    <Card>
       <View style={s.cardTop}>
         <Text style={s.courseName}>{round.course}</Text>
         <Text style={s.replyBy}>{round.replyBy}</Text>
       </View>
       <Text style={s.meta}>{round.meta}</Text>
       <View style={s.rsvpRow}>
-        <TouchableOpacity style={s.rsvpIn} activeOpacity={0.7} onPress={() => router.push(`/invite/${round.id}`)}>
+        <TouchableOpacity style={s.rsvpIn} activeOpacity={0.7} onPress={() => router.push(`/invite/${round.id}?rsvp=in`)}>
           <Text style={s.rsvpInText}>I'm in</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={s.rsvpMaybe} activeOpacity={0.7} onPress={() => router.push(`/invite/${round.id}`)}>
+        <TouchableOpacity style={s.rsvpMaybe} activeOpacity={0.7} onPress={() => router.push(`/invite/${round.id}?rsvp=maybe`)}>
           <Text style={s.rsvpMaybeText}>Maybe</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={s.rsvpOut} activeOpacity={0.7} onPress={() => router.push(`/invite/${round.id}`)}>
+        <TouchableOpacity style={s.rsvpOut} activeOpacity={0.7} onPress={() => router.push(`/invite/${round.id}?rsvp=out`)}>
           <Text style={s.rsvpOutText}>Can't go</Text>
         </TouchableOpacity>
       </View>
@@ -164,6 +166,8 @@ function AwaitingCard({ round }: { round: (typeof AWAITING)[number] }) {
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
+
   return (
     <View style={s.root}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: Colors.green }}>
@@ -183,23 +187,29 @@ export default function HomeScreen() {
 
       <ScrollView
         style={s.scroll}
-        contentContainerStyle={s.content}
+        contentContainerStyle={[s.content, { paddingBottom: insets.bottom + 80 }]}
         showsVerticalScrollIndicator={false}
       >
-        <SectionLabel label="You're running this 🎙️" />
-        {HOSTING.map((r) => (
-          <HostingCard key={r.id} round={r} />
-        ))}
+        {HOSTING.length > 0 && (
+          <>
+            <SectionLabel label="You're running this 🎙️" />
+            {HOSTING.map((r) => <HostingCard key={r.id} round={r} />)}
+          </>
+        )}
 
-        <SectionLabel label="Locked in 🤝" />
-        {CONFIRMED.map((r) => (
-          <ConfirmedCard key={r.id} round={r} />
-        ))}
+        {CONFIRMED.length > 0 && (
+          <>
+            <SectionLabel label="Locked in 🤝" />
+            {CONFIRMED.map((r) => <ConfirmedCard key={r.id} round={r} />)}
+          </>
+        )}
 
-        <SectionLabel label="Your move 👀" />
-        {AWAITING.map((r) => (
-          <AwaitingCard key={r.id} round={r} />
-        ))}
+        {AWAITING.length > 0 && (
+          <>
+            <SectionLabel label="Your move 👀" />
+            {AWAITING.map((r) => <AwaitingCard key={r.id} round={r} />)}
+          </>
+        )}
       </ScrollView>
     </View>
   );

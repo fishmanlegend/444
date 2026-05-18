@@ -31,8 +31,7 @@ interface Player {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEFAULT_YARDAGE = 380;
-const PAR_OPTIONS = [3, 4, 5] as const;
-type ParValue = (typeof PAR_OPTIONS)[number];
+const PAR_CHIPS = [3, 4, 5] as const;
 
 // ─── Mock data ────────────────────────────────────────────────────────────────
 
@@ -131,13 +130,26 @@ function ParChipsRow({
   onSelect,
 }: {
   confirmedPar: number | null;
-  onSelect: (p: ParValue) => void;
+  onSelect: (p: number) => void;
 }) {
+  const step = (delta: number) => {
+    const base = confirmedPar ?? 4;
+    onSelect(Math.max(1, base + delta));
+  };
+
   return (
     <View style={[s.infoRow, s.infoRowBorder]}>
       <Text style={s.infoLabel}>Par</Text>
       <View style={s.parChips}>
-        {PAR_OPTIONS.map((p) => {
+        <TouchableOpacity
+          onPress={() => step(-1)}
+          activeOpacity={0.7}
+          style={s.parStepper}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        >
+          <Text style={s.parStepperText}>−</Text>
+        </TouchableOpacity>
+        {PAR_CHIPS.map((p) => {
           const isSelected = confirmedPar === p;
           return (
             <TouchableOpacity
@@ -152,6 +164,19 @@ function ParChipsRow({
             </TouchableOpacity>
           );
         })}
+        <TouchableOpacity
+          onPress={() => step(1)}
+          activeOpacity={0.7}
+          style={s.parStepper}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        >
+          <Text style={s.parStepperText}>+</Text>
+        </TouchableOpacity>
+        {confirmedPar !== null && !PAR_CHIPS.includes(confirmedPar as never) && (
+          <View style={s.parChipSelected}>
+            <Text style={[s.parChipText, s.parChipTextSelected]}>{confirmedPar}</Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -619,7 +644,21 @@ const s = StyleSheet.create({
   },
   infoRowBorder: { borderBottomWidth: 0.5, borderBottomColor: Colors.border },
   infoLabel: { fontFamily: Fonts.sans, fontSize: 13, color: Colors.muted },
-  parChips: { flexDirection: 'row', gap: 6 },
+  parChips: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  parStepper: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: Colors.creamLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  parStepperText: {
+    fontFamily: Fonts.sansMedium,
+    fontSize: 16,
+    color: Colors.text,
+    lineHeight: 20,
+  },
   parChip: {
     width: 38,
     height: 30,

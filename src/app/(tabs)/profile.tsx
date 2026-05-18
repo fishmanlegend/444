@@ -1,5 +1,6 @@
+import { useRouter } from 'expo-router';
 import React from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Avatar } from '@/components/Avatar';
@@ -11,64 +12,62 @@ import { Colors, Fonts, Spacing } from '@/constants/theme';
 const USER = {
   initials: 'WK',
   name: 'Wyatt K.',
-  handicap: 12.4,
+  handle: '@WyattK',
+  location: 'Chicago, IL',
+  bio: 'Weekend warrior. Cog Hill regular. Will bet on anything.',
+  socialLinks: ['X @WyattK', '@wyatt.golf'],
   bg: Colors.creamLight,
   textColor: Colors.green,
 };
 
 const STATS = [
-  { value: '24', label: 'rounds' },
-  { value: '+6.2', label: 'avg score' },
-  { value: '47', label: 'birdies' },
+  { value: '47', label: 'rounds' },
+  { value: '12', label: 'hosted' },
+  { value: '8.4', label: 'handicap' },
 ];
 
-const RECENT_ROUNDS = [
-  { id: '1', course: 'Cog Hill No. 4', date: 'May 17', format: 'Stroke', diff: 4 },
-  { id: '2', course: 'Medinah No. 3', date: 'May 10', format: 'Match', diff: 9 },
-  { id: '3', course: 'Cog Hill No. 2', date: 'May 3', format: 'Stroke', diff: 7 },
-  { id: '4', course: 'Butler National', date: 'Apr 26', format: 'Stroke', diff: 2 },
-] as const;
+const BADGES = [
+  { emoji: '🏌️', title: '25 Rounds', sub: 'Played', earned: true },
+  { emoji: '🎤', title: '10 Hosted', sub: 'Organizer', earned: true },
+  { emoji: '🦅', title: 'Eagle Club', sub: 'Earned', earned: true },
+  { emoji: '🏆', title: '50 Rounds', sub: '3 away', earned: false },
+];
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function toParLabel(diff: number): string {
-  if (diff === 0) return 'E';
-  return diff > 0 ? `+${diff}` : `${diff}`;
-}
-
-function toParColor(diff: number): string {
-  if (diff <= -2) return '#1a7a1a';
-  if (diff === -1) return '#2a9a2a';
-  if (diff === 0) return Colors.muted;
-  if (diff === 1) return '#c08a20';
-  return '#b04030';
-}
+const PALS = [
+  { initials: 'MR', bg: '#c8a96e', textColor: '#fff', name: 'Mike R.', handle: '@mikerounds', rounds: 18 },
+  { initials: 'DL', bg: '#5a8a5a', textColor: '#fff', name: 'Darin L.', handle: '@darinl', rounds: 14 },
+  { initials: 'CQ', bg: '#a06060', textColor: '#fff', name: 'Cathy Q.', handle: '@CathyQF', rounds: 9 },
+  { initials: 'BS', bg: '#7a6a9a', textColor: '#fff', name: 'Broken Scaphoid', handle: '@brokenscaphoid', rounds: 8 },
+];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function StatTile({ value, label }: { value: string; label: string }) {
+function BadgeTile({ badge }: { badge: (typeof BADGES)[number] }) {
   return (
-    <View style={s.statTile}>
-      <Text style={s.statValue}>{value}</Text>
-      <Text style={s.statLabel}>{label}</Text>
+    <View style={[s.badgeTile, !badge.earned && s.badgeTileLocked]}>
+      <Text style={[s.badgeEmoji, !badge.earned && s.badgeLocked]}>{badge.emoji}</Text>
+      <Text style={[s.badgeTitle, !badge.earned && s.badgeLocked]}>{badge.title}</Text>
+      <Text style={[s.badgeSub, !badge.earned && s.badgeLocked]}>{badge.sub}</Text>
     </View>
   );
 }
 
-function RoundRow({
-  round, showBorder,
-}: {
-  round: (typeof RECENT_ROUNDS)[number]; showBorder: boolean;
-}) {
+function PalRow({ pal, showBorder }: { pal: (typeof PALS)[number]; showBorder: boolean }) {
   return (
-    <View style={[s.roundRow, showBorder && s.roundRowBorder]}>
-      <View style={s.roundLeft}>
-        <Text style={s.roundCourse}>{round.course}</Text>
-        <Text style={s.roundMeta}>{round.date} · {round.format}</Text>
+    <View style={[s.palRow, showBorder && s.palRowBorder]}>
+      <Avatar
+        initials={pal.initials}
+        bg={pal.bg}
+        textColor={pal.textColor}
+        size={36}
+        borderWidth={0}
+        borderColor="transparent"
+      />
+      <View style={s.palInfo}>
+        <Text style={s.palName}>{pal.name}</Text>
+        <Text style={s.palHandle}>{pal.handle}</Text>
       </View>
-      <Text style={[s.roundScore, { color: toParColor(round.diff) }]}>
-        {toParLabel(round.diff)}
-      </Text>
+      <Text style={s.palRounds}>{pal.rounds} rounds</Text>
     </View>
   );
 }
@@ -81,26 +80,66 @@ export default function ProfileScreen() {
   return (
     <View style={s.root}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: Colors.green }}>
-        <TopBar right={<Text style={s.settingsBtn}>⚙️</Text>} />
+        <TopBar
+          right={
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => Alert.alert('Edit profile', 'Coming soon.')}
+            >
+              <Text style={s.editBtn}>Edit</Text>
+            </TouchableOpacity>
+          }
+        />
       </SafeAreaView>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: insets.bottom + Spacing.xxl }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 80 }}
       >
         {/* ── Green header ── */}
         <View style={s.header}>
-          <Avatar
-            initials={USER.initials}
-            bg={USER.bg}
-            textColor={USER.textColor}
-            size={72}
-            borderColor={Colors.green}
-            borderWidth={3}
-          />
-          <Text style={s.userName}>{USER.name}</Text>
-          <View style={s.hcpBadge}>
-            <Text style={s.hcpText}>HCP {USER.handicap.toFixed(1)}</Text>
+          {/* Avatar + info */}
+          <View style={s.avatarInfoRow}>
+            <View>
+              <Avatar
+                initials={USER.initials}
+                bg={USER.bg}
+                textColor={USER.textColor}
+                size={76}
+                borderColor="rgba(216,214,175,0.4)"
+                borderWidth={3}
+              />
+              <View style={s.avatarAddBtn}>
+                <Text style={s.avatarAddPlus}>+</Text>
+              </View>
+            </View>
+            <View style={s.userInfo}>
+              <Text style={s.userName}>{USER.name}</Text>
+              <Text style={s.userHandle}>{USER.handle} · {USER.location}</Text>
+              <Text style={s.userBio}>{USER.bio}</Text>
+            </View>
+          </View>
+
+          {/* Social links */}
+          <View style={s.socialRow}>
+            {USER.socialLinks.map((link) => (
+              <View key={link} style={s.socialPill}>
+                <Text style={s.socialPillText}>{link}</Text>
+              </View>
+            ))}
+          </View>
+
+          {/* Stats bar */}
+          <View style={s.statsBar}>
+            {STATS.map((stat, i) => (
+              <React.Fragment key={stat.label}>
+                <View style={s.statItem}>
+                  <Text style={s.statValue}>{stat.value}</Text>
+                  <Text style={s.statLabel}>{stat.label}</Text>
+                </View>
+                {i < STATS.length - 1 && <View style={s.statDivider} />}
+              </React.Fragment>
+            ))}
           </View>
         </View>
 
@@ -108,44 +147,19 @@ export default function ProfileScreen() {
         <View style={s.drawer}>
           <View style={s.handle} />
 
-          {/* Stats row */}
-          <View style={s.statsRow}>
-            {STATS.map((stat, i) => (
-              <React.Fragment key={stat.label}>
-                <StatTile value={stat.value} label={stat.label} />
-                {i < STATS.length - 1 && <View style={s.statDivider} />}
-              </React.Fragment>
-            ))}
+          {/* Badges */}
+          <Text style={s.sectionLabel}>Badges</Text>
+          <View style={s.badgeRow}>
+            {BADGES.map((b) => <BadgeTile key={b.title} badge={b} />)}
           </View>
 
-          {/* Recent rounds */}
-          <Text style={s.sectionLabel}>On the card 🃏</Text>
-          <View style={s.card}>
-            {RECENT_ROUNDS.map((r, i) => (
-              <RoundRow
-                key={r.id}
-                round={r}
-                showBorder={i < RECENT_ROUNDS.length - 1}
-              />
+          {/* Pals */}
+          <Text style={s.sectionLabel}>Pals</Text>
+          <View style={s.palsCard}>
+            <Text style={s.palsSubtitle}>People you often golf with</Text>
+            {PALS.map((pal, i) => (
+              <PalRow key={pal.handle} pal={pal} showBorder={i < PALS.length - 1} />
             ))}
-          </View>
-
-          {/* Settings links */}
-          <View style={s.settingsCard}>
-            <TouchableOpacity style={s.settingsRow} activeOpacity={0.7}>
-              <Text style={s.settingsRowText}>Edit profile</Text>
-              <Text style={s.settingsArrow}>›</Text>
-            </TouchableOpacity>
-            <View style={s.settingsRowDivider} />
-            <TouchableOpacity style={s.settingsRow} activeOpacity={0.7}>
-              <Text style={s.settingsRowText}>Notifications</Text>
-              <Text style={s.settingsArrow}>›</Text>
-            </TouchableOpacity>
-            <View style={s.settingsRowDivider} />
-            <TouchableOpacity style={s.settingsRow} activeOpacity={0.7}>
-              <Text style={[s.settingsRowText, { color: '#b04030' }]}>Sign out</Text>
-              <Text style={s.settingsArrow}>›</Text>
-            </TouchableOpacity>
           </View>
         </View>
       </ScrollView>
@@ -158,35 +172,110 @@ export default function ProfileScreen() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.green },
 
-  settingsBtn: { fontSize: 16 },
+  editBtn: {
+    fontFamily: Fonts.sans,
+    fontSize: 13,
+    color: 'rgba(216,214,175,0.6)',
+  },
 
   // Header
   header: {
     backgroundColor: Colors.green,
     paddingHorizontal: 18,
-    paddingBottom: 28,
+    paddingBottom: 20,
+  },
+  avatarInfoRow: {
+    flexDirection: 'row',
+    gap: 14,
+    marginBottom: 14,
+  },
+  avatarAddBtn: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: Colors.green,
+    borderWidth: 2,
+    borderColor: Colors.creamLight,
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarAddPlus: {
+    fontSize: 13,
+    color: Colors.cream,
+    lineHeight: 16,
+  },
+  userInfo: {
+    flex: 1,
+    justifyContent: 'center',
+    gap: 3,
   },
   userName: {
     fontFamily: Fonts.serifMedium,
-    fontSize: 26,
+    fontSize: 28,
     color: Colors.cream,
-    marginTop: 12,
-    marginBottom: 8,
   },
-  hcpBadge: {
-    backgroundColor: 'rgba(216,214,175,0.15)',
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
+  userHandle: {
+    fontFamily: Fonts.sans,
+    fontSize: 13,
+    color: 'rgba(216,214,175,0.6)',
+  },
+  userBio: {
+    fontFamily: Fonts.sans,
+    fontSize: 13,
+    color: 'rgba(216,214,175,0.75)',
+    lineHeight: 18,
+  },
+
+  // Social pills
+  socialRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  socialPill: {
     borderWidth: 1,
     borderColor: 'rgba(216,214,175,0.25)',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
   },
-  hcpText: {
-    fontFamily: Fonts.sansMedium,
+  socialPillText: {
+    fontFamily: Fonts.sans,
     fontSize: 12,
-    color: 'rgba(216,214,175,0.7)',
-    letterSpacing: 0.5,
+    color: 'rgba(216,214,175,0.65)',
+  },
+
+  // Stats bar
+  statsBar: {
+    backgroundColor: 'rgba(0,0,0,0.28)',
+    borderRadius: 14,
+    flexDirection: 'row',
+    paddingVertical: 16,
+  },
+  statItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statValue: {
+    fontFamily: Fonts.serifMedium,
+    fontSize: 30,
+    color: Colors.cream,
+    marginBottom: 2,
+  },
+  statLabel: {
+    fontFamily: Fonts.sansSemiBold,
+    fontSize: 9,
+    color: 'rgba(216,214,175,0.5)',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  statDivider: {
+    width: 0.5,
+    backgroundColor: 'rgba(216,214,175,0.2)',
+    marginVertical: 6,
   },
 
   // Drawer
@@ -204,7 +293,7 @@ const s = StyleSheet.create({
     backgroundColor: '#d8d4c0',
     borderRadius: 4,
     alignSelf: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
   },
   sectionLabel: {
     fontFamily: Fonts.sansSemiBold,
@@ -215,101 +304,81 @@ const s = StyleSheet.create({
     marginBottom: 10,
   },
 
-  // Stats
-  statsRow: {
+  // Badges
+  badgeRow: {
     flexDirection: 'row',
+    gap: 8,
+    marginBottom: 24,
+  },
+  badgeTile: {
+    flex: 1,
     backgroundColor: Colors.card,
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 0.5,
     borderColor: Colors.border,
-    marginBottom: 20,
-    overflow: 'hidden',
-  },
-  statTile: {
-    flex: 1,
-    paddingVertical: 16,
+    padding: 10,
     alignItems: 'center',
+    gap: 4,
   },
-  statValue: {
-    fontFamily: Fonts.serifMedium,
-    fontSize: 24,
+  badgeTileLocked: {
+    backgroundColor: Colors.creamLight,
+  },
+  badgeEmoji: { fontSize: 22 },
+  badgeTitle: {
+    fontFamily: Fonts.sansMedium,
+    fontSize: 10,
     color: Colors.text,
-    marginBottom: 3,
+    textAlign: 'center',
   },
-  statLabel: {
+  badgeSub: {
     fontFamily: Fonts.sans,
-    fontSize: 11,
+    fontSize: 9,
     color: Colors.muted,
+    textAlign: 'center',
   },
-  statDivider: {
-    width: 0.5,
-    backgroundColor: Colors.border,
-    marginVertical: 12,
-  },
+  badgeLocked: { opacity: 0.4 },
 
-  // Recent rounds
-  card: {
+  // Pals
+  palsCard: {
     backgroundColor: Colors.card,
     borderRadius: 14,
     borderWidth: 0.5,
     borderColor: Colors.border,
     paddingHorizontal: 14,
-    marginBottom: 20,
+    paddingTop: 12,
+    marginBottom: Spacing.xl,
   },
-  roundRow: {
+  palsSubtitle: {
+    fontFamily: Fonts.sans,
+    fontSize: 12,
+    color: Colors.muted,
+    marginBottom: 12,
+  },
+  palRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 13,
+    gap: 12,
+    paddingVertical: 10,
   },
-  roundRowBorder: {
+  palRowBorder: {
     borderBottomWidth: 0.5,
     borderBottomColor: Colors.border,
   },
-  roundLeft: { flex: 1 },
-  roundCourse: {
+  palInfo: { flex: 1 },
+  palName: {
     fontFamily: Fonts.sansMedium,
     fontSize: 14,
     color: Colors.text,
-    marginBottom: 2,
+    marginBottom: 1,
   },
-  roundMeta: {
+  palHandle: {
     fontFamily: Fonts.sans,
     fontSize: 12,
     color: Colors.muted,
   },
-  roundScore: {
-    fontFamily: Fonts.serifMedium,
-    fontSize: 22,
-    minWidth: 32,
-    textAlign: 'right',
-  },
-
-  // Settings
-  settingsCard: {
-    backgroundColor: Colors.card,
-    borderRadius: 14,
-    borderWidth: 0.5,
-    borderColor: Colors.border,
-    paddingHorizontal: 14,
-  },
-  settingsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-  },
-  settingsRowDivider: {
-    height: 0.5,
-    backgroundColor: Colors.border,
-  },
-  settingsRowText: {
-    fontFamily: Fonts.sansMedium,
-    fontSize: 14,
-    color: Colors.text,
-  },
-  settingsArrow: {
+  palRounds: {
     fontFamily: Fonts.sans,
-    fontSize: 18,
+    fontSize: 12,
     color: Colors.muted,
   },
 });

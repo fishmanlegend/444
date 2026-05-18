@@ -1,14 +1,17 @@
 {
   "expo": {
-    "name": "444",
-    "slug": "444",
+    "name": "GolfApp",
+    "slug": "golf444",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "444",
+    "scheme": "golf444",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "bundleIdentifier": "com.darinli.golf444",
+      "infoPlist": {
+        "CFBundleDisplayName": "444"
+      }
     },
     "android": {
       "adaptiveIcon": {

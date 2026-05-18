@@ -1,6 +1,7 @@
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
   KeyboardAvoidingView,
@@ -60,6 +61,7 @@ function PickerSheet({
 
 export default function CreateScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
 
   const [emojiIdx, setEmojiIdx] = useState(0);
   const [date, setDate] = useState<Date | null>(null);
@@ -102,7 +104,14 @@ export default function CreateScreen() {
   return (
     <View style={s.root}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: Colors.green }}>
-        <TopBar right={<Text style={s.topBarLabel}>New round</Text>} />
+        <TopBar
+          left={
+            <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+              <Text style={s.cancelBtn}>Cancel</Text>
+            </TouchableOpacity>
+          }
+          right={<Text style={s.topBarLabel}>New round</Text>}
+        />
       </SafeAreaView>
 
       <ScrollView
@@ -387,6 +396,11 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.green },
 
   topBarLabel: {
+    fontFamily: Fonts.sans,
+    fontSize: 13,
+    color: 'rgba(216,214,175,0.6)',
+  },
+  cancelBtn: {
     fontFamily: Fonts.sans,
     fontSize: 13,
     color: 'rgba(216,214,175,0.6)',

@@ -126,12 +126,16 @@ function RsvpConfirmBanner({
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function InviteScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, rsvp: initialRsvp } = useLocalSearchParams<{ id: string; rsvp?: string }>();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const round = MOCK_ROUNDS[id ?? ''] ?? MOCK_ROUNDS.default;
 
-  const [rsvp, setRsvp] = useState<RsvpStatus>(null);
+  const parsedInitial: RsvpStatus =
+    initialRsvp === 'in' || initialRsvp === 'maybe' || initialRsvp === 'out'
+      ? initialRsvp
+      : null;
+  const [rsvp, setRsvp] = useState<RsvpStatus>(parsedInitial);
 
   // Count people going (in + maybe) and spots remaining
   const confirmedIn = round.attendees.filter((a) => a.status === 'in').length + (rsvp === 'in' ? 1 : 0);
