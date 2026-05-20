@@ -1,6 +1,7 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Keyboard,
   KeyboardAvoidingView,
@@ -17,6 +18,9 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Avatar } from '@/components/Avatar';
 import { TopBar } from '@/components/TopBar';
 import { Colors, Fonts } from '@/constants/theme';
+import { useAuth } from '@/context/auth';
+import { getRoundWithPlayers, getHoles, getMatchTeams, getMatchHoles, upsertMatchHole } from '@/lib/db';
+import type { RoundFormat, MatchTeam, MatchHole } from '@/lib/database.types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,45 +36,11 @@ interface Player {
 
 const DEFAULT_YARDAGE = 380;
 const PAR_CHIPS = [3, 4, 5] as const;
+const TAB_ITEM_WIDTH = 40;
 
-// ─── Mock data ────────────────────────────────────────────────────────────────
-
-const ROUND = {
-  course: 'Cog Hill No. 4 🌿',
-  meta: 'Stroke play · Sat May 17',
-  totalHoles: 18,
-  startingHole: 7,
+const FORMAT_LABEL: Record<RoundFormat, string> = {
+  stroke: 'Stroke', skins: 'Skins', stableford: 'Stableford', match: 'Match', other: 'Other',
 };
-
-const PLAYERS: Player[] = [
-  { id: 'wk', initials: 'WK', bg: Colors.creamLight, textColor: Colors.green, name: 'Wyatt K.' },
-  { id: 'mr', initials: 'MR', bg: '#c8a96e', textColor: '#fff', name: 'Mike R.' },
-  { id: 'dk', initials: 'DK', bg: '#5a8a5a', textColor: '#fff', name: 'Dave K.' },
-  { id: 'pw', initials: 'PW', bg: '#7a6a9a', textColor: '#fff', name: 'Pete W.' },
-];
-
-const ME = PLAYERS[0];
-const OTHERS = PLAYERS.slice(1);
-
-const PARS: Record<number, number> = {
-  1: 4, 2: 5, 3: 3, 4: 4, 5: 4, 6: 3, 7: 4, 8: 5, 9: 4,
-  10: 4, 11: 3, 12: 5, 13: 4, 14: 4, 15: 3, 16: 4, 17: 5, 18: 4,
-};
-
-const YARDAGES: Record<number, number> = {
-  1: 385, 2: 520, 3: 175, 4: 430, 5: 380, 6: 165, 7: 410, 8: 545, 9: 395,
-  10: 420, 11: 185, 12: 535, 13: 405, 14: 380, 15: 170, 16: 395, 17: 545, 18: 440,
-};
-
-const INITIAL_SCORES: Record<string, Record<number, number>> = {
-  wk: { 1: 4, 2: 5, 3: 4, 4: 4, 5: 5, 6: 3 },
-  mr: { 1: 5, 2: 4, 3: 3, 4: 5, 5: 4, 6: 4 },
-  dk: { 1: 4, 2: 6, 3: 3, 4: 4, 5: 4, 6: 3 },
-  pw: { 1: 5, 2: 5, 3: 4, 4: 4, 5: 5, 6: 4 },
-};
-
-const COMPLETED_HOLES = 6;
-const TAB_ITEM_WIDTH = 40; // 34px circle + 6px gap
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -91,8 +61,9 @@ function calcStandings(
   scores: Record<string, Record<number, number | null>>,
   holePars: Record<number, number | null>,
   throughHole: number,
+  players: Player[],
 ) {
-  return PLAYERS.map((p) => {
+  return players.map((p) => {
     let diff = 0;
     for (let h = 1; h <= throughHole; h++) {
       const score = scores[p.id]?.[h];
@@ -211,12 +182,11 @@ function YardageRow({
 }
 
 function ScoreRow({
-  player, score, confirmedPar, displayPar, showBorder, readOnly, onDecrement, onIncrement,
+  player, score, confirmedPar, showBorder, readOnly, onDecrement, onIncrement,
 }: {
   player: Player;
   score: number | null;
   confirmedPar: number | null;
-  displayPar: number;
   showBorder: boolean;
   readOnly: boolean;
   onDecrement: () => void;
@@ -281,6 +251,34 @@ function ScoreRow({
   );
 }
 
+function MatchHoleRow({
+  holeNumber, result, teamALabel, teamBLabel, onPress,
+}: {
+  holeNumber: number;
+  result: 'a' | 'b' | 'halve' | null;
+  teamALabel: string;
+  teamBLabel: string;
+  onPress: () => void;
+}) {
+  const CYCLE: Array<'a' | 'b' | 'halve' | null> = ['a', 'halve', 'b', null];
+  const label = result === 'a' ? teamALabel : result === 'b' ? teamBLabel : result === 'halve' ? 'Halve' : '–';
+  const labelColor = result === null ? Colors.muted : result === 'halve' ? Colors.muted : Colors.text;
+
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.7} style={s.matchHoleRow}>
+      <Text style={s.matchHoleNum}>Hole {holeNumber}</Text>
+      <Text style={[s.matchHoleResult, { color: labelColor }]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function cycleMatchResult(current: 'a' | 'b' | 'halve' | null): 'a' | 'b' | 'halve' | null {
+  if (current === null) return 'a';
+  if (current === 'a') return 'halve';
+  if (current === 'halve') return 'b';
+  return null;
+}
+
 function TrackOthersToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   return (
     <TouchableOpacity onPress={onToggle} activeOpacity={0.7} style={s.trackToggle}>
@@ -316,39 +314,106 @@ function StandingRow({
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function ScorecardScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { session } = useAuth();
   const holeTabsRef = useRef<ScrollView>(null);
   const isFirstRender = useRef(true);
 
-  const [activeHole, setActiveHole] = useState(ROUND.startingHole);
+  const [players, setPlayers] = useState<Player[]>([]);
+  const [me, setMe] = useState<Player | null>(null);
+  const [others, setOthers] = useState<Player[]>([]);
+  const [totalHoles, setTotalHoles] = useState(18);
+  const [startingHole, setStartingHole] = useState(1);
+  const [courseName, setCourseName] = useState('');
+  const [roundMeta, setRoundMeta] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  const [activeHole, setActiveHole] = useState(1);
   const [trackOthers, setTrackOthers] = useState(false);
-  const [unlockedHoles, setUnlockedHoles] = useState<Record<number, boolean>>({});
+  const [format, setFormat] = useState<RoundFormat>('stroke');
 
-  const [holePars, setHolePars] = useState<Record<number, number | null>>(() => {
-    const init: Record<number, number | null> = {};
-    for (let h = 1; h <= COMPLETED_HOLES; h++) init[h] = PARS[h];
-    return init;
-  });
+  const [holePars, setHolePars] = useState<Record<number, number | null>>({});
+  const [holeYardageTexts, setHoleYardageTexts] = useState<Record<number, string>>({});
+  const [scores, setScores] = useState<Record<string, Record<number, number | null>>>({});
 
-  const [holeYardageTexts, setHoleYardageTexts] = useState<Record<number, string>>(() => {
-    const init: Record<number, string> = {};
-    for (let h = 1; h <= COMPLETED_HOLES; h++) init[h] = `${YARDAGES[h]}`;
-    return init;
-  });
+  const [matchTeams, setMatchTeams] = useState<MatchTeam[]>([]);
+  const [matchHoleResults, setMatchHoleResults] = useState<Record<number, 'a' | 'b' | 'halve' | null>>({});
 
-  const [scores, setScores] = useState<Record<string, Record<number, number | null>>>(() => {
-    const init: Record<string, Record<number, number | null>> = {};
-    for (const p of PLAYERS) {
-      init[p.id] = {};
-      for (let h = 1; h <= ROUND.totalHoles; h++) {
-        init[p.id][h] = INITIAL_SCORES[p.id]?.[h] ?? null;
+  useEffect(() => {
+    if (!id) { setLoading(false); return; }
+
+    const fetchData = async () => {
+      const [round, holes] = await Promise.all([getRoundWithPlayers(id), getHoles(id)]);
+      if (!round) { setLoading(false); return; }
+
+      const userId = session?.user.id ?? (__DEV__ ? '46bae3d3-2c18-450e-b267-f36b91a94a31' : null);
+
+      const mapped: Player[] = (round.players as any[])
+        .filter((p) => p.rsvp === 'in')
+        .map((p) => ({
+          id: p.player_id,
+          name: p.profile?.name ?? 'Player',
+          initials: p.profile?.initials ?? '?',
+          bg: p.profile?.avatar_color ?? Colors.creamLight,
+          textColor: p.profile?.avatar_text_color ?? Colors.green,
+        }));
+      setPlayers(mapped);
+
+      const myPlayer = mapped.find((p) => p.id === userId) ?? mapped[0] ?? null;
+      setMe(myPlayer);
+      setOthers(myPlayer ? mapped.filter((p) => p.id !== myPlayer.id) : mapped);
+
+      const nh = round.total_holes ?? 18;
+      const sh = round.starting_hole ?? 1;
+      setTotalHoles(nh);
+      setStartingHole(sh);
+      setActiveHole(sh);
+      setCourseName(round.course_name ?? 'Golf Round');
+      setFormat(round.format);
+
+      const fmtLabel = FORMAT_LABEL[round.format];
+      const dateStr = round.scheduled_at
+        ? new Date(round.scheduled_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+        : null;
+      setRoundMeta([fmtLabel, dateStr].filter(Boolean).join(' · '));
+
+      const sortedHoles = holes.sort((a, b) => a.hole_number - b.hole_number);
+      const parsMap: Record<number, number | null> = {};
+      const yardsMap: Record<number, string> = {};
+      for (let h = 1; h <= nh; h++) {
+        const hole = sortedHoles.find((x) => x.hole_number === h);
+        parsMap[h] = hole?.par ?? null;
+        yardsMap[h] = hole?.yardage != null ? `${hole.yardage}` : '';
       }
-    }
-    return init;
-  });
+      setHolePars(parsMap);
+      setHoleYardageTexts(yardsMap);
 
-  // Auto-scroll tabs to keep active hole visible
+      const initScores: Record<string, Record<number, number | null>> = {};
+      for (const p of mapped) {
+        initScores[p.id] = {};
+        for (let h = 1; h <= nh; h++) initScores[p.id][h] = null;
+      }
+      setScores(initScores);
+
+      if (round.format === 'match') {
+        const [teams, mholes] = await Promise.all([getMatchTeams(id), getMatchHoles(id)]);
+        setMatchTeams(teams);
+        const results: Record<number, 'a' | 'b' | 'halve' | null> = {};
+        for (let h = 1; h <= nh; h++) {
+          const mh = mholes.find((x) => x.hole_number === h);
+          results[h] = mh?.result ?? null;
+        }
+        setMatchHoleResults(results);
+      }
+
+      setLoading(false);
+    };
+
+    fetchData();
+  }, [id, session]);
+
   useEffect(() => {
     const scrollX = Math.max(0, (activeHole - 1) * TAB_ITEM_WIDTH - 162);
     holeTabsRef.current?.scrollTo({ x: scrollX, animated: !isFirstRender.current });
@@ -363,25 +428,36 @@ export default function ScorecardScreen() {
     });
   }
 
+  if (loading) {
+    return (
+      <View style={[s.root, { alignItems: 'center', justifyContent: 'center' }]}>
+        <ActivityIndicator color={Colors.cream} />
+      </View>
+    );
+  }
+
   const confirmedPar = holePars[activeHole] ?? null;
-  const displayPar = confirmedPar ?? 4;
   const yardageText = holeYardageTexts[activeHole] ?? '';
   const isYardageConfirmed = yardageText.length > 0;
-  const isLockedHole = activeHole <= COMPLETED_HOLES && !unlockedHoles[activeHole];
   const completedThrough = activeHole - 1;
 
   const hasStandingsData = completedThrough > 0 &&
     Object.entries(holePars).some(([h, par]) => parseInt(h) <= completedThrough && par !== null);
-  const standings = hasStandingsData ? calcStandings(scores, holePars, completedThrough) : [];
+  const standings = hasStandingsData ? calcStandings(scores, holePars, completedThrough, players) : [];
 
-  const isLastHole = activeHole === ROUND.totalHoles;
+  const isLastHole = activeHole === totalHoles;
+
+  const teamAPlayers = matchTeams.filter((t) => t.team === 'a').map((t) => players.find((p) => p.id === t.player_id)?.name ?? 'Team A');
+  const teamBPlayers = matchTeams.filter((t) => t.team === 'b').map((t) => players.find((p) => p.id === t.player_id)?.name ?? 'Team B');
+  const teamALabel = teamAPlayers.join(' & ') || 'Team A';
+  const teamBLabel = teamBPlayers.join(' & ') || 'Team B';
 
   function goNext() {
     Keyboard.dismiss();
     if (isLastHole) {
       Alert.alert('Wrap it up?', 'End the round and see final scores.', [
         { text: 'Keep playing', style: 'cancel' },
-        { text: 'Finish round', onPress: () => router.push('/post-round/1') },
+        { text: 'Finish round', onPress: () => router.push(`/post-round/${id}` as any) },
       ]);
     } else {
       setActiveHole((h) => h + 1);
@@ -416,10 +492,10 @@ export default function ScorecardScreen() {
       >
         {/* ── Green header ── */}
         <View style={s.header}>
-          <Text style={s.courseName}>{ROUND.course}</Text>
-          <Text style={s.meta}>{ROUND.meta}</Text>
+          <Text style={s.courseName}>{courseName}</Text>
+          {roundMeta ? <Text style={s.meta}>{roundMeta}</Text> : null}
           <View style={s.avatarStack}>
-            {PLAYERS.map((p, i) => (
+            {players.map((p, i) => (
               <Avatar
                 key={p.id}
                 initials={p.initials}
@@ -428,7 +504,7 @@ export default function ScorecardScreen() {
                 size={30}
                 borderColor={Colors.green}
                 borderWidth={2}
-                style={{ marginRight: -7, zIndex: PLAYERS.length - i }}
+                style={{ marginRight: -7, zIndex: players.length - i }}
               />
             ))}
           </View>
@@ -447,7 +523,7 @@ export default function ScorecardScreen() {
             contentContainerStyle={s.holeTabsContent}
             style={s.holeTabs}
           >
-            {Array.from({ length: ROUND.totalHoles }, (_, i) => i + 1).map((hole) => (
+            {Array.from({ length: totalHoles }, (_, i) => i + 1).map((hole) => (
               <HoleTab
                 key={hole}
                 hole={hole}
@@ -458,7 +534,6 @@ export default function ScorecardScreen() {
             ))}
           </ScrollView>
 
-          {/* Hole label */}
           <Text style={s.sectionLabel}>HOLE {activeHole}</Text>
 
           {/* Par + yardage */}
@@ -478,42 +553,57 @@ export default function ScorecardScreen() {
           </View>
 
           {/* Score entry */}
-          <View style={s.card}>
-            <ScoreRow
-              player={ME}
-              score={scores[ME.id]?.[activeHole] ?? null}
-              confirmedPar={confirmedPar}
-              displayPar={displayPar}
-              showBorder
-              readOnly={isLockedHole}
-              onDecrement={() => updateScore(ME.id, activeHole, -1)}
-              onIncrement={() => updateScore(ME.id, activeHole, 1)}
-            />
-            {trackOthers && OTHERS.map((p) => (
-              <ScoreRow
-                key={p.id}
-                player={p}
-                score={scores[p.id]?.[activeHole] ?? null}
-                confirmedPar={confirmedPar}
-                displayPar={displayPar}
-                showBorder
-                readOnly={isLockedHole}
-                onDecrement={() => updateScore(p.id, activeHole, -1)}
-                onIncrement={() => updateScore(p.id, activeHole, 1)}
-              />
-            ))}
-            <TrackOthersToggle open={trackOthers} onToggle={() => setTrackOthers((v) => !v)} />
-          </View>
-
-          {/* Unlock completed holes */}
-          {isLockedHole && (
-            <TouchableOpacity
-              style={s.adjustLink}
-              activeOpacity={0.7}
-              onPress={() => setUnlockedHoles((prev) => ({ ...prev, [activeHole]: true }))}
-            >
-              <Text style={s.adjustLinkText}>Adjust scores ›</Text>
-            </TouchableOpacity>
+          {format === 'match' ? (
+            <View style={s.card}>
+              <View style={s.matchTeamHeader}>
+                <Text style={s.matchTeamLabel}>{teamALabel}</Text>
+                <Text style={s.matchTeamVs}>vs</Text>
+                <Text style={s.matchTeamLabel}>{teamBLabel}</Text>
+              </View>
+              {Array.from({ length: totalHoles }, (_, i) => i + 1).map((h, i) => (
+                <MatchHoleRow
+                  key={h}
+                  holeNumber={h}
+                  result={matchHoleResults[h] ?? null}
+                  teamALabel={teamALabel}
+                  teamBLabel={teamBLabel}
+                  onPress={() => {
+                    const next = cycleMatchResult(matchHoleResults[h] ?? null);
+                    setMatchHoleResults((prev) => ({ ...prev, [h]: next }));
+                    upsertMatchHole(id, h, next);
+                  }}
+                />
+              ))}
+            </View>
+          ) : (
+            <View style={s.card}>
+              {me && (
+                <ScoreRow
+                  player={me}
+                  score={scores[me.id]?.[activeHole] ?? null}
+                  confirmedPar={confirmedPar}
+                  showBorder={trackOthers && others.length > 0}
+                  readOnly={false}
+                  onDecrement={() => updateScore(me.id, activeHole, -1)}
+                  onIncrement={() => updateScore(me.id, activeHole, 1)}
+                />
+              )}
+              {trackOthers && others.map((p, i) => (
+                <ScoreRow
+                  key={p.id}
+                  player={p}
+                  score={scores[p.id]?.[activeHole] ?? null}
+                  confirmedPar={confirmedPar}
+                  showBorder={i < others.length - 1}
+                  readOnly={false}
+                  onDecrement={() => updateScore(p.id, activeHole, -1)}
+                  onIncrement={() => updateScore(p.id, activeHole, 1)}
+                />
+              ))}
+              {others.length > 0 && (
+                <TrackOthersToggle open={trackOthers} onToggle={() => setTrackOthers((v) => !v)} />
+              )}
+            </View>
           )}
 
           {/* Standings */}
@@ -536,7 +626,6 @@ export default function ScorecardScreen() {
         </View>
       </ScrollView>
 
-      {/* ── Fixed bottom bar — stays above keyboard via KeyboardAvoidingView ── */}
       <View style={s.bottomBar}>
         <View style={[s.bottomBarInner, { paddingBottom: insets.bottom + 10 }]}>
           <TouchableOpacity
@@ -550,7 +639,7 @@ export default function ScorecardScreen() {
             </Text>
           </TouchableOpacity>
 
-          <Text style={s.holeNavCenter}>{activeHole} / {ROUND.totalHoles}</Text>
+          <Text style={s.holeNavCenter}>{activeHole} / {totalHoles}</Text>
 
           <TouchableOpacity
             onPress={goNext}
@@ -576,13 +665,11 @@ const s = StyleSheet.create({
   backBtn: { fontFamily: Fonts.sans, fontSize: 13, color: 'rgba(216,214,175,0.6)' },
   liveBadge: { fontFamily: Fonts.sans, fontSize: 12, color: '#5aaa5a' },
 
-  // Header
   header: { backgroundColor: Colors.green, paddingHorizontal: 18, paddingBottom: 30 },
   courseName: { fontFamily: Fonts.serifMedium, fontSize: 23, color: Colors.cream, marginBottom: 4 },
   meta: { fontFamily: Fonts.sans, fontSize: 13, color: 'rgba(216,214,175,0.6)', marginBottom: 14 },
   avatarStack: { flexDirection: 'row' },
 
-  // Drawer
   drawer: {
     backgroundColor: Colors.bg,
     borderTopLeftRadius: 24,
@@ -592,114 +679,67 @@ const s = StyleSheet.create({
     paddingHorizontal: 16,
   },
   handle: {
-    width: 32,
-    height: 3,
-    backgroundColor: '#d8d4c0',
-    borderRadius: 4,
-    alignSelf: 'center',
-    marginBottom: 16,
+    width: 32, height: 3, backgroundColor: '#d8d4c0',
+    borderRadius: 4, alignSelf: 'center', marginBottom: 16,
   },
 
-  // Hole tabs
   holeTabs: { marginBottom: 16 },
   holeTabsContent: { gap: 6, paddingHorizontal: 2 },
   holeTab: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 34, height: 34, borderRadius: 17,
+    borderWidth: 1, borderColor: Colors.border,
+    alignItems: 'center', justifyContent: 'center',
   },
   holeTabActive: { backgroundColor: Colors.green, borderColor: Colors.green },
   holeTabComplete: { backgroundColor: Colors.card, borderColor: Colors.border },
   holeTabNum: { fontFamily: Fonts.sansMedium, fontSize: 12, color: Colors.muted },
 
   sectionLabel: {
-    fontFamily: Fonts.sansSemiBold,
-    fontSize: 10,
-    color: Colors.muted,
-    textTransform: 'uppercase',
-    letterSpacing: 1.2,
-    marginBottom: 10,
+    fontFamily: Fonts.sansSemiBold, fontSize: 10, color: Colors.muted,
+    textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 10,
   },
 
-  // Shared card
   card: {
-    backgroundColor: Colors.card,
-    borderRadius: 14,
-    borderWidth: 0.5,
-    borderColor: Colors.border,
-    paddingHorizontal: 14,
-    marginBottom: 20,
+    backgroundColor: Colors.card, borderRadius: 14,
+    borderWidth: 0.5, borderColor: Colors.border,
+    paddingHorizontal: 14, marginBottom: 20,
   },
 
-  // Par chips + yardage rows
   infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 11,
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', paddingVertical: 11,
   },
   infoRowBorder: { borderBottomWidth: 0.5, borderBottomColor: Colors.border },
   infoLabel: { fontFamily: Fonts.sans, fontSize: 13, color: Colors.muted },
   parChips: { flexDirection: 'row', gap: 6, alignItems: 'center' },
   parStepper: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: Colors.creamLight,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: Colors.creamLight, alignItems: 'center', justifyContent: 'center',
   },
-  parStepperText: {
-    fontFamily: Fonts.sansMedium,
-    fontSize: 16,
-    color: Colors.text,
-    lineHeight: 20,
-  },
+  parStepperText: { fontFamily: Fonts.sansMedium, fontSize: 16, color: Colors.text, lineHeight: 20 },
   parChip: {
-    width: 38,
-    height: 30,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.creamLight,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 38, height: 30, borderRadius: 8, borderWidth: 1,
+    borderColor: Colors.border, backgroundColor: Colors.creamLight,
+    alignItems: 'center', justifyContent: 'center',
   },
   parChipSelected: { backgroundColor: Colors.green, borderColor: Colors.green },
   parChipText: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.muted },
   parChipTextSelected: { color: Colors.cream },
-  infoInput: {
-    fontFamily: Fonts.sansMedium,
-    fontSize: 13,
-    minWidth: 60,
-    textAlign: 'right',
-    padding: 0,
-  },
+  infoInput: { fontFamily: Fonts.sansMedium, fontSize: 13, minWidth: 60, textAlign: 'right', padding: 0 },
   infoInputConfirmed: { color: Colors.text },
   infoInputPlaceholder: { color: Colors.muted },
 
-  // Score entry
   scoreRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between', paddingVertical: 12,
   },
   scoreRowBorder: { borderBottomWidth: 0.5, borderBottomColor: Colors.border },
   scoreLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   scorePlayerName: { fontFamily: Fonts.sansMedium, fontSize: 14, color: Colors.text },
   scoreControls: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   scoreBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Colors.creamLight,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: Colors.creamLight, alignItems: 'center', justifyContent: 'center',
   },
   scoreBtnText: { fontFamily: Fonts.sans, fontSize: 18, color: Colors.text, lineHeight: 22 },
   scoreNums: { alignItems: 'center', width: 40 },
@@ -707,50 +747,26 @@ const s = StyleSheet.create({
   scoreNumEmpty: { color: Colors.muted },
   scoreDiff: { fontFamily: Fonts.sansMedium, fontSize: 11, lineHeight: 14 },
 
-  // Track others + adjust link
   trackToggle: {
-    paddingVertical: 11,
-    alignItems: 'center',
-    borderTopWidth: 0.5,
-    borderTopColor: Colors.border,
+    paddingVertical: 11, alignItems: 'center',
+    borderTopWidth: 0.5, borderTopColor: Colors.border,
   },
   trackToggleText: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted },
-  adjustLink: {
-    alignSelf: 'flex-end',
-    marginTop: -14,
-    marginBottom: 16,
-    paddingVertical: 4,
-  },
-  adjustLinkText: {
-    fontFamily: Fonts.sans,
-    fontSize: 12,
-    color: Colors.muted,
-    textDecorationLine: 'underline',
-  },
 
-  // Standings — to-par only, no raw strokes mid-round
   standingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 10 },
   standingRowBorder: { borderBottomWidth: 0.5, borderBottomColor: Colors.border },
   standingRank: { fontFamily: Fonts.sansSemiBold, fontSize: 12, color: Colors.muted, width: 14, textAlign: 'center' },
   standingName: { fontFamily: Fonts.sansMedium, fontSize: 14, color: Colors.text, flex: 1 },
   standingDiff: { fontFamily: Fonts.serifMedium, fontSize: 20, textAlign: 'right' },
 
-  // Fixed bottom bar
   bottomBar: { backgroundColor: Colors.bg, borderTopWidth: 0.5, borderTopColor: Colors.border },
   bottomBarInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 12,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingTop: 12,
   },
   holeNavBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    backgroundColor: Colors.creamLight,
-    minWidth: 90,
-    alignItems: 'center',
+    paddingVertical: 8, paddingHorizontal: 16, borderRadius: 10,
+    backgroundColor: Colors.creamLight, minWidth: 90, alignItems: 'center',
   },
   holeNavBtnDisabled: { opacity: 0.35 },
   holeNavBtnFinish: { backgroundColor: Colors.green },
@@ -758,4 +774,17 @@ const s = StyleSheet.create({
   holeNavBtnTextDisabled: { color: Colors.muted },
   holeNavBtnTextFinish: { color: Colors.cream },
   holeNavCenter: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.muted },
+
+  matchTeamHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: Colors.border,
+  },
+  matchTeamLabel: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.text, flex: 1, textAlign: 'center' },
+  matchTeamVs: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted, width: 24, textAlign: 'center' },
+  matchHoleRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 11, borderBottomWidth: 0.5, borderBottomColor: Colors.border,
+  },
+  matchHoleNum: { fontFamily: Fonts.sans, fontSize: 13, color: Colors.muted },
+  matchHoleResult: { fontFamily: Fonts.sansMedium, fontSize: 14 },
 });

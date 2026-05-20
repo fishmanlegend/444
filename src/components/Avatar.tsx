@@ -1,3 +1,4 @@
+import { Image } from 'expo-image';
 import React from 'react';
 import { StyleSheet, Text, View, ViewStyle } from 'react-native';
 
@@ -11,6 +12,7 @@ interface AvatarProps {
   borderColor?: string;
   borderWidth?: number;
   style?: ViewStyle;
+  uri?: string | null;
 }
 
 export function Avatar({
@@ -21,21 +23,29 @@ export function Avatar({
   borderColor = Colors.bg,
   borderWidth = 2,
   style,
+  uri,
 }: AvatarProps) {
+  const circleStyle = {
+    width: size,
+    height: size,
+    borderRadius: size / 2,
+    borderColor,
+    borderWidth,
+  };
+
+  if (uri) {
+    return (
+      <Image
+        source={{ uri }}
+        style={[s.circle, circleStyle, style] as any}
+        contentFit="cover"
+      />
+    );
+  }
+
   return (
     <View
-      style={[
-        s.circle,
-        {
-          width: size,
-          height: size,
-          borderRadius: size / 2,
-          backgroundColor: bg,
-          borderColor,
-          borderWidth,
-        },
-        style,
-      ]}
+      style={[s.circle, circleStyle, { backgroundColor: bg }, style]}
     >
       <Text style={[s.text, { fontSize: Math.round(size * 0.33), color: textColor }]}>
         {initials}

@@ -1,172 +1,260 @@
-import { useRouter } from 'expo-router';
-import React from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image } from 'expo-image';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { useFocusEffect, useIsFocused, usePathname, useRootNavigationState, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Animated,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Avatar } from '@/components/Avatar';
-import { Card } from '@/components/Card';
 import { TopBar } from '@/components/TopBar';
 import { Colors, Fonts, Spacing } from '@/constants/theme';
+import { PRESET_IMAGES } from '@/constants/presetImages';
+import { PRESET_GIFS } from '@/constants/presetGifs';
+import { useAuth } from '@/context/auth';
+import { getHomeRounds, updateRsvp, type HomeRound } from '@/lib/db';
+import { onRoundsChanged } from '@/lib/roundsRefresh';
+import type { Round } from '@/lib/database.types';
 
-// ─── Mock data ────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-const HOSTING = [
-  {
-    id: '1',
-    course: 'Cog Hill No. 4',
-    tag: '$20 skins',
-    meta: 'Sat May 17 · 7:42am',
-    players: [
-      { initials: 'WK', bg: Colors.green, textColor: Colors.cream },
-      { initials: 'MR', bg: '#c8a96e', textColor: '#fff' },
-    ],
-    openSpots: 2,
-  },
-] as const;
+type Role = 'hosting' | 'going' | 'invited' | 'finished';
 
-const CONFIRMED = [
-  {
-    id: '2',
-    course: 'Medinah No. 3',
-    meta: 'Sun May 18 · 8:15am · Match play',
-    players: [
-      { initials: 'MR', bg: '#c8a96e', textColor: '#fff' },
-      { initials: 'WK', bg: Colors.green, textColor: Colors.cream },
-      { initials: 'DK', bg: '#5a8a5a', textColor: '#fff' },
-      { initials: 'PW', bg: '#7a6a9a', textColor: '#fff' },
-    ],
-  },
-] as const;
+interface CardRound extends HomeRound {
+  role: Role;
+}
 
-const AWAITING = [
-  {
-    id: '3',
-    course: 'Cog Hill No. 2',
-    replyBy: 'Reply by Fri',
-    meta: 'Sat May 24 · 9:00am · Stroke',
-  },
-] as const;
+const CARD_GAP = 10;
+const CARD_PADDING = 16;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function getCoverSource(round: Round): number | null {
+  if (!round.cover_image_id) return null;
+  if (round.cover_is_video) return PRESET_GIFS.find((g) => g.id === round.cover_image_id)?.source ?? null;
+  return PRESET_IMAGES.find((i) => i.id === round.cover_image_id)?.source ?? null;
+}
+
+function fmtCardDate(iso: string): string {
+  const d = new Date(iso);
+  const date = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return `${date} · ${time}`;
+}
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function SectionLabel({ label }: { label: string }) {
-  return <Text style={s.sectionLabel}>{label}</Text>;
+function VideoThumb({ source, style }: { source: number; style: object }) {
+  const player = useVideoPlayer(source, (p) => { p.loop = true; p.muted = true; p.play(); });
+  return <VideoView player={player} style={style} contentFit="cover" contentPosition="center" nativeControls={false} />;
 }
 
-function AvatarStack({
-  players,
-  openSpots = 0,
-}: {
-  players: readonly { initials: string; bg: string; textColor: string }[];
-  openSpots?: number;
-}) {
+function RoleBadge({ role }: { role: Role }) {
+  const label =
+    role === 'hosting'  ? 'Hosting' :
+    role === 'going'    ? 'Going ✓' :
+    role === 'finished' ? 'Done ✓' :
+                          'Reply needed';
+  const bg =
+    role === 'hosting'  ? Colors.green :
+    role === 'going'    ? '#4a8a4a' :
+    role === 'finished' ? Colors.muted :
+                          '#b07818';
   return (
-    <View style={s.avatarRow}>
-      {players.map((p, i) => (
-        <Avatar
-          key={i}
-          initials={p.initials}
-          bg={p.bg}
-          textColor={p.textColor}
-          size={30}
-          borderColor={Colors.card}
-          borderWidth={2}
-          style={{ marginRight: -7 }}
-        />
-      ))}
-      {Array.from({ length: openSpots }).map((_, i) => (
-        <View key={`open-${i}`} style={s.avatarOpen}>
-          <Text style={s.avatarOpenPlus}>+</Text>
-        </View>
-      ))}
+    <View style={[s.badge, { backgroundColor: bg }]}>
+      <Text style={s.badgeText}>{label}</Text>
     </View>
   );
 }
 
-function SmallButtons({
-  left, right, onLeftPress, onRightPress,
-}: {
-  left: string; right: string; onLeftPress?: () => void; onRightPress?: () => void;
+function EventCard({ round, cardSize, onPress }: {
+  round: CardRound;
+  cardSize: number;
+  onPress: () => void;
 }) {
+  const source = getCoverSource(round);
   return (
-    <View style={s.btnPair}>
-      <TouchableOpacity style={s.btnGhost} activeOpacity={0.7} onPress={onLeftPress}>
-        <Text style={s.btnGhostText}>{left}</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={s.btnSolid} activeOpacity={0.7} onPress={onRightPress}>
-        <Text style={s.btnSolidText}>{right}</Text>
-      </TouchableOpacity>
+    <TouchableOpacity style={[s.card, { width: cardSize }]} activeOpacity={0.88} onPress={onPress}>
+      {/* Square image with badge overlay */}
+      <View style={[s.cardImage, { width: cardSize, height: cardSize }]}>
+        {source ? (
+          round.cover_is_video
+            ? <VideoThumb source={source} style={StyleSheet.absoluteFill} />
+            : <Image source={source} style={StyleSheet.absoluteFill} contentFit="cover" contentPosition="center" />
+        ) : null}
+        <RoleBadge role={round.role} />
+      </View>
+
+      {/* Text below image */}
+      <View style={s.cardInfo}>
+        <Text style={s.cardTitle} numberOfLines={2}>
+          {round.course_name ?? 'Golf Round'}
+        </Text>
+        <Text style={s.cardDate}>
+          {round.scheduled_at ? fmtCardDate(round.scheduled_at) : 'Date TBD'}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function ReplyCard({ round, cardSize, userId, onNavigate }: {
+  round: HomeRound;
+  cardSize: number;
+  userId: string;
+  onNavigate: (rsvp: 'in' | 'maybe') => void;
+}) {
+  const [declined, setDeclined] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const frownScale = useRef(new Animated.Value(0)).current;
+  const frownOpacity = useRef(new Animated.Value(0)).current;
+
+  const handleRsvp = async (rsvp: 'in' | 'maybe' | 'out') => {
+    if (busy) return;
+    setBusy(true);
+    await updateRsvp(round.id, userId, rsvp);
+    if (rsvp === 'out') {
+      setDeclined(true);
+      Animated.sequence([
+        Animated.parallel([
+          Animated.spring(frownScale, { toValue: 1, useNativeDriver: true, friction: 5 }),
+          Animated.timing(frownOpacity, { toValue: 1, duration: 150, useNativeDriver: true }),
+        ]),
+        Animated.delay(900),
+        Animated.timing(frownOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
+      ]).start();
+    } else {
+      onNavigate(rsvp);
+    }
+    setBusy(false);
+  };
+
+  const source = getCoverSource(round);
+  return (
+    <View style={[s.card, { width: cardSize }]}>
+      <View style={[s.cardImage, { width: cardSize, height: cardSize }]}>
+        {source ? (
+          round.cover_is_video
+            ? <VideoThumb source={source} style={StyleSheet.absoluteFill} />
+            : <Image source={source} style={StyleSheet.absoluteFill} contentFit="cover" contentPosition="center" />
+        ) : null}
+        <Animated.View style={[StyleSheet.absoluteFill, s.frownOverlay, { opacity: frownOpacity }]}>
+          <Animated.Text style={[s.frownEmoji, { transform: [{ scale: frownScale }] }]}>☹️</Animated.Text>
+        </Animated.View>
+      </View>
+      <View style={s.cardInfo}>
+        <Text style={s.cardTitle} numberOfLines={2}>
+          {round.course_name ?? 'Golf Round'}
+        </Text>
+        <Text style={s.cardDate}>
+          {round.scheduled_at ? fmtCardDate(round.scheduled_at) : 'Date TBD'}
+        </Text>
+        {declined ? (
+          <TouchableOpacity style={s.notGoingBanner} activeOpacity={0.75} onPress={() => onNavigate('maybe')}>
+            <Text style={s.notGoingText}>Not going · tap to change</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={s.replyBtns}>
+            <TouchableOpacity style={s.replyIn} activeOpacity={0.75} onPress={() => handleRsvp('in')}>
+              <Text style={s.replyInText}>✓</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.replyMaybe} activeOpacity={0.75} onPress={() => handleRsvp('maybe')}>
+              <Text style={s.replyMaybeText}>?</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.replyOut} activeOpacity={0.75} onPress={() => handleRsvp('out')}>
+              <Text style={s.replyOutText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
     </View>
   );
 }
 
-function HostingCard({ round }: { round: (typeof HOSTING)[number] }) {
-  const router = useRouter();
+function EmptyState() {
   return (
-    <Card>
-      <View style={s.cardTop}>
-        <Text style={s.courseName}>{round.course}</Text>
-        <View style={s.tag}>
-          <Text style={s.tagText}>{round.tag}</Text>
-        </View>
-      </View>
-      <Text style={s.meta}>{round.meta}</Text>
-      <AvatarStack players={round.players} openSpots={round.openSpots} />
-      <SmallButtons
-        left="💬 Message"
-        right="Manage →"
-        onLeftPress={() => Alert.alert('Group chat', 'Messaging is coming soon.')}
-        onRightPress={() => router.push(`/scorecard/${round.id}`)}
-      />
-    </Card>
-  );
-}
-
-function ConfirmedCard({ round }: { round: (typeof CONFIRMED)[number] }) {
-  const router = useRouter();
-  return (
-    <Card style={{ opacity: 0.88 }}>
-      <Text style={[s.courseName, { marginBottom: 5 }]}>{round.course}</Text>
-      <Text style={s.meta}>{round.meta}</Text>
-      <AvatarStack players={round.players} />
-      <SmallButtons
-        left="💬 Message"
-        right="View →"
-        onLeftPress={() => Alert.alert('Group chat', 'Messaging is coming soon.')}
-        onRightPress={() => router.push(`/scorecard/${round.id}`)}
-      />
-    </Card>
-  );
-}
-
-function AwaitingCard({ round }: { round: (typeof AWAITING)[number] }) {
-  const router = useRouter();
-  return (
-    <Card>
-      <View style={s.cardTop}>
-        <Text style={s.courseName}>{round.course}</Text>
-        <Text style={s.replyBy}>{round.replyBy}</Text>
-      </View>
-      <Text style={s.meta}>{round.meta}</Text>
-      <View style={s.rsvpRow}>
-        <TouchableOpacity style={s.rsvpIn} activeOpacity={0.7} onPress={() => router.push(`/invite/${round.id}?rsvp=in`)}>
-          <Text style={s.rsvpInText}>I'm in</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.rsvpMaybe} activeOpacity={0.7} onPress={() => router.push(`/invite/${round.id}?rsvp=maybe`)}>
-          <Text style={s.rsvpMaybeText}>Maybe</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.rsvpOut} activeOpacity={0.7} onPress={() => router.push(`/invite/${round.id}?rsvp=out`)}>
-          <Text style={s.rsvpOutText}>Can't go</Text>
-        </TouchableOpacity>
-      </View>
-    </Card>
+    <View style={s.emptyState}>
+      <Text style={s.emptyEmoji}>🏌️</Text>
+      <Text style={s.emptyHeading}>No rounds on the card.</Text>
+      <Text style={s.emptySub}>Tap + below to get one going.</Text>
+    </View>
   );
 }
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
+  const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { session, profile } = useAuth();
+  const userId = session?.user.id ?? (__DEV__ ? '46bae3d3-2c18-450e-b267-f36b91a94a31' : '');
+
+  const [hosting, setHosting] = useState<HomeRound[]>([]);
+  const [confirmed, setConfirmed] = useState<HomeRound[]>([]);
+  const [awaiting, setAwaiting] = useState<HomeRound[]>([]);
+  const [finished, setFinished] = useState<HomeRound[]>([]);
+
+  const fetchSeq = useRef(0);
+  const fetchRounds = useCallback(() => {
+    if (!userId) return;
+    const seq = ++fetchSeq.current;
+    getHomeRounds(userId).then(({ hosting, confirmed, awaiting, finished }) => {
+      if (seq !== fetchSeq.current) return; // a newer fetch started — discard this stale result
+      setHosting(hosting);
+      setConfirmed(confirmed);
+      setAwaiting(awaiting);
+      setFinished(finished);
+    });
+  }, [userId]);
+
+  // Strategy 1: useFocusEffect (standard pattern)
+  useFocusEffect(useCallback(() => { fetchRounds(); }, [fetchRounds]));
+
+  // Strategy 2: useIsFocused — fires when focus state toggles
+  const isFocused = useIsFocused();
+  useEffect(() => { if (isFocused) fetchRounds(); }, [isFocused]);
+
+  // Strategy 3: root navigation stack depth — fires when returning from any stack screen
+  const rootState = useRootNavigationState();
+  useEffect(() => {
+    if (rootState?.index === 0) fetchRounds();
+  }, [rootState?.index]);
+
+  // Strategy 4: pathname change — fires on every navigation
+  const pathname = usePathname();
+  useEffect(() => { fetchRounds(); }, [pathname]);
+
+  // Pub/sub from manage screen saves
+  useEffect(() => onRoundsChanged(fetchRounds), [fetchRounds]);
+
+  const upcomingRounds: CardRound[] = [
+    ...hosting.map((r) => ({ ...r, role: 'hosting' as Role })),
+    ...confirmed.map((r) => ({ ...r, role: 'going' as Role })),
+  ].sort((a, b) => {
+    if (!a.scheduled_at && !b.scheduled_at) return 0;
+    if (!a.scheduled_at) return 1;
+    if (!b.scheduled_at) return -1;
+    return new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime();
+  });
+
+  const cardSize = Math.floor((width - CARD_PADDING * 2 - CARD_GAP) / 2);
+  const isEmpty = upcomingRounds.length === 0 && awaiting.length === 0 && finished.length === 0;
+
+  function handleCardPress(round: CardRound) {
+    if (round.role === 'hosting') {
+      router.push(`/manage/${round.id}` as any);
+    } else {
+      router.push(`/invite/${round.id}` as any);
+    }
+  }
 
   return (
     <View style={s.root}>
@@ -174,9 +262,9 @@ export default function HomeScreen() {
         <TopBar
           right={
             <Avatar
-              initials="WK"
-              bg={Colors.cream}
-              textColor={Colors.green}
+              initials={profile?.initials ?? '?'}
+              bg={profile?.avatar_color ?? Colors.cream}
+              textColor={profile?.avatar_text_color ?? Colors.green}
               size={32}
               borderWidth={0}
               borderColor="transparent"
@@ -190,24 +278,72 @@ export default function HomeScreen() {
         contentContainerStyle={[s.content, { paddingBottom: insets.bottom + 80 }]}
         showsVerticalScrollIndicator={false}
       >
-        {HOSTING.length > 0 && (
+        {isEmpty ? (
+          <EmptyState />
+        ) : (
           <>
-            <SectionLabel label="You're running this 🎙️" />
-            {HOSTING.map((r) => <HostingCard key={r.id} round={r} />)}
-          </>
-        )}
+            {upcomingRounds.length > 0 && (
+              <>
+                <Text style={s.sectionLabel}>Upcoming</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={s.grid}
+                >
+                  {upcomingRounds.map((round) => (
+                    <EventCard
+                      key={`${round.id}:${round.cover_image_id ?? ''}`}
+                      round={round}
+                      cardSize={cardSize}
+                      onPress={() => handleCardPress(round)}
+                    />
+                  ))}
+                </ScrollView>
+              </>
+            )}
 
-        {CONFIRMED.length > 0 && (
-          <>
-            <SectionLabel label="Locked in 🤝" />
-            {CONFIRMED.map((r) => <ConfirmedCard key={r.id} round={r} />)}
-          </>
-        )}
+            {awaiting.length > 0 && (
+              <>
+                <Text style={[s.sectionLabel, { marginTop: upcomingRounds.length > 0 ? 24 : 0 }]}>
+                  Reply now 👋
+                </Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={s.grid}
+                >
+                  {awaiting.map((round) => (
+                    <ReplyCard
+                      key={`${round.id}:${round.cover_image_id ?? ''}`}
+                      round={round}
+                      cardSize={cardSize}
+                      userId={userId}
+                      onNavigate={(rsvp) => router.push(`/invite/${round.id}?rsvp=${rsvp}` as any)}
+                    />
+                  ))}
+                </ScrollView>
+              </>
+            )}
 
-        {AWAITING.length > 0 && (
-          <>
-            <SectionLabel label="Your move 👀" />
-            {AWAITING.map((r) => <AwaitingCard key={r.id} round={r} />)}
+            {finished.length > 0 && (
+              <>
+                <Text style={[s.sectionLabel, { marginTop: 24 }]}>Finished</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={s.grid}
+                >
+                  {finished.map((round) => (
+                    <EventCard
+                      key={round.id}
+                      round={{ ...round, role: 'finished' }}
+                      cardSize={cardSize}
+                      onPress={() => router.push(`/post-round/${round.id}` as any)}
+                    />
+                  ))}
+                </ScrollView>
+              </>
+            )}
           </>
         )}
       </ScrollView>
@@ -220,7 +356,7 @@ export default function HomeScreen() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.green },
   scroll: { flex: 1, backgroundColor: Colors.bg },
-  content: { padding: Spacing.lg, paddingBottom: Spacing.xxl },
+  content: { paddingTop: CARD_PADDING, paddingBottom: CARD_PADDING },
 
   sectionLabel: {
     fontFamily: Fonts.sansSemiBold,
@@ -228,134 +364,110 @@ const s = StyleSheet.create({
     color: Colors.muted,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
-    marginBottom: 10,
+    marginBottom: 12,
+    paddingHorizontal: CARD_PADDING,
   },
 
-  cardTop: {
+  grid: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 5,
-  },
-  courseName: {
-    fontFamily: Fonts.serifMedium,
-    fontSize: 19,
-    color: Colors.text,
-    flex: 1,
-    marginRight: 8,
-  },
-  meta: {
-    fontFamily: Fonts.sans,
-    fontSize: 13,
-    color: Colors.muted,
-    marginBottom: 13,
+    gap: CARD_GAP,
+    paddingHorizontal: CARD_PADDING,
+    paddingBottom: 4,
   },
 
-  tag: {
-    backgroundColor: '#e4f0e4',
-    borderRadius: 20,
-    paddingHorizontal: 9,
+  card: {
+    borderRadius: 14,
+    backgroundColor: Colors.card,
+    borderWidth: 1.5,
+    borderColor: Colors.green,
+    overflow: 'hidden',
+  },
+
+  cardImage: {
+    overflow: 'hidden',
+    backgroundColor: '#1a3320',
+  },
+
+  cardInfo: {
+    paddingHorizontal: 11,
+    paddingTop: 10,
+    paddingBottom: 12,
+    gap: 4,
+  },
+
+  badge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    borderRadius: 6,
+    paddingHorizontal: 7,
     paddingVertical: 3,
   },
-  tagText: {
-    fontFamily: Fonts.sansMedium,
-    fontSize: 10,
-    color: '#2a5428',
-  },
-  replyBy: {
-    fontFamily: Fonts.sansMedium,
-    fontSize: 11,
-    color: '#c08a20',
+  badgeText: {
+    fontFamily: Fonts.sansSemiBold,
+    fontSize: 9,
+    color: '#fff',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
 
-  avatarRow: {
-    flexDirection: 'row',
-    marginBottom: 13,
+  cardTitle: {
+    fontFamily: Fonts.serifMedium,
+    fontSize: 15,
+    color: Colors.text,
+    lineHeight: 20,
   },
-  avatarOpen: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: Colors.creamLight,
-    borderWidth: 1.5,
-    borderColor: '#c8c4b0',
+  cardDate: {
+    fontFamily: Fonts.sans,
+    fontSize: 11,
+    color: Colors.muted,
+    lineHeight: 16,
+  },
+
+  replyBtns: {
+    flexDirection: 'row',
+    gap: 5,
+    marginTop: 6,
+  },
+  replyIn: {
+    flex: 1, backgroundColor: '#c2d9c2', borderRadius: 7,
+    paddingVertical: 4, alignItems: 'center',
+  },
+  replyInText: { fontFamily: Fonts.sansMedium, fontSize: 12, color: '#2a5428' },
+  replyMaybe: {
+    flex: 1, backgroundColor: Colors.creamLight, borderRadius: 7,
+    paddingVertical: 4, alignItems: 'center',
+  },
+  replyMaybeText: { fontFamily: Fonts.sansMedium, fontSize: 12, color: Colors.muted },
+  replyOut: {
+    flex: 1, backgroundColor: '#fce8e8', borderRadius: 7,
+    paddingVertical: 4, alignItems: 'center',
+  },
+  replyOutText: { fontFamily: Fonts.sansMedium, fontSize: 12, color: '#b04030' },
+
+  notGoingBanner: {
+    marginTop: 6, backgroundColor: '#fce8e8', borderRadius: 7,
+    paddingVertical: 5, alignItems: 'center',
+  },
+  notGoingText: { fontFamily: Fonts.sansMedium, fontSize: 12, color: '#b04030' },
+
+  frownOverlay: {
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  frownEmoji: { fontSize: 52 },
+
+  emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: -7,
+    paddingTop: 100,
   },
-  avatarOpenPlus: {
-    fontFamily: Fonts.sans,
-    fontSize: 13,
-    color: '#b8b4a0',
+  emptyEmoji: { fontSize: 48, marginBottom: 16 },
+  emptyHeading: {
+    fontFamily: Fonts.serifMedium,
+    fontSize: 22,
+    color: Colors.text,
+    marginBottom: 8,
   },
-
-  btnPair: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-  },
-  btnGhost: {
-    flex: 1,
-    backgroundColor: Colors.creamLight,
-    borderRadius: 10,
-    padding: Spacing.sm,
-    alignItems: 'center',
-  },
-  btnGhostText: {
-    fontFamily: Fonts.sans,
-    fontSize: 12,
-    color: '#666',
-  },
-  btnSolid: {
-    flex: 1,
-    backgroundColor: Colors.green,
-    borderRadius: 10,
-    padding: Spacing.sm,
-    alignItems: 'center',
-  },
-  btnSolidText: {
-    fontFamily: Fonts.sans,
-    fontSize: 12,
-    color: Colors.cream,
-  },
-
-  rsvpRow: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-  },
-  rsvpIn: {
-    flex: 1,
-    backgroundColor: '#e4f0e4',
-    borderRadius: 10,
-    padding: Spacing.sm,
-    alignItems: 'center',
-  },
-  rsvpInText: {
-    fontFamily: Fonts.sansMedium,
-    fontSize: 12,
-    color: '#2a5428',
-  },
-  rsvpMaybe: {
-    flex: 1,
-    backgroundColor: '#f5f0df',
-    borderRadius: 10,
-    padding: Spacing.sm,
-    alignItems: 'center',
-  },
-  rsvpMaybeText: {
-    fontFamily: Fonts.sansMedium,
-    fontSize: 12,
-    color: '#8a7840',
-  },
-  rsvpOut: {
-    flex: 1,
-    backgroundColor: Colors.creamLight,
-    borderRadius: 10,
-    padding: Spacing.sm,
-    alignItems: 'center',
-  },
-  rsvpOutText: {
-    fontFamily: Fonts.sans,
-    fontSize: 12,
-    color: '#999',
-  },
+  emptySub: { fontFamily: Fonts.sans, fontSize: 14, color: Colors.muted },
 });

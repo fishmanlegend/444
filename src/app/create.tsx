@@ -1,8 +1,10 @@
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
-import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import { Image } from 'expo-image';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -15,16 +17,55 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
+
+const GOOGLE_PLACES_KEY = 'AIzaSyCBg-Tq8VIWljmdsT5FDaO_SYoGhSPomgs'; // TODO: rotate + restrict before shipping
 
 import { Avatar } from '@/components/Avatar';
 import { Button } from '@/components/Button';
 import { TopBar } from '@/components/TopBar';
 import { Colors, Fonts, Spacing } from '@/constants/theme';
+import { DEFAULT_COVER, PRESET_IMAGES } from '@/constants/presetImages';
+import { PRESET_GIFS } from '@/constants/presetGifs';
+import { CoverPickerModal } from '@/components/CoverPickerModal';
+import { useAuth } from '@/context/auth';
+import { bulkInviteToRound, createRound, getClubWithMembers } from '@/lib/db';
+import type { Club } from '@/lib/database.types';
+
+// ─── Smart defaults ───────────────────────────────────────────────────────────
+
+function comingSaturday(): Date {
+  const d = new Date();
+  const daysUntil = d.getDay() === 6 ? 0 : (6 - d.getDay());
+  d.setDate(d.getDate() + daysUntil);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function defaultTeeTime(): Date {
+  const d = new Date();
+  d.setHours(8, 0, 0, 0);
+  return d;
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const EMOJIS = ['⛳', '🏌️', '🏆', '🍺', '😤'];
-const FORMATS = ['Stroke play', 'Match play', 'Stableford', 'Skins'];
+const FORMATS = ['Stroke play', 'Match play', 'Stableford', 'Skins', 'Other'];
+const FORMAT_MAP: Record<string, 'stroke' | 'match' | 'stableford' | 'skins' | 'other'> = {
+  'Stroke play': 'stroke', 'Match play': 'match', 'Stableford': 'stableford', 'Skins': 'skins', 'Other': 'other',
+};
+
+// ─── Video cover preview ─────────────────────────────────────────────────────
+
+function VideoCoverPreview({ source, style }: { source: number; style: object }) {
+  const player = useVideoPlayer(source, (p) => {
+    p.loop = true;
+    p.muted = true;
+    p.play();
+  });
+  return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
+}
+
 
 // ─── Bottom sheet wrapper ─────────────────────────────────────────────────────
 
@@ -59,13 +100,23 @@ function PickerSheet({
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
+const DEFAULT_PARS = [4,4,3,4,5,3,4,5,4, 4,3,4,5,4,3,5,4,4];
+
 export default function CreateScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { profile } = useAuth();
+  const { club_id: clubIdParam } = useLocalSearchParams<{ club_id?: string }>();
+  const [saving, setSaving] = useState(false);
+  const [sourceClub, setSourceClub] = useState<Club | null>(null);
 
-  const [emojiIdx, setEmojiIdx] = useState(0);
+  const [eventName, setEventName] = useState('The Next Round');
+  const [coverImage, setCoverImage] = useState<number>(DEFAULT_COVER);
+  const [coverIsVideo, setCoverIsVideo] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
   const [date, setDate] = useState<Date | null>(null);
   const [time, setTime] = useState<Date | null>(null);
+  const [courseName, setCourseName] = useState('');
   const [formatIdx, setFormatIdx] = useState(0);
   const [spots, setSpots] = useState(4);
   const [cost, setCost] = useState('');
@@ -76,6 +127,14 @@ export default function CreateScreen() {
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showFormatModal, setShowFormatModal] = useState(false);
   const [showNoteModal, setShowNoteModal] = useState(false);
+  const [showCourseSearch, setShowCourseSearch] = useState(false);
+
+  useEffect(() => {
+    if (!clubIdParam) return;
+    getClubWithMembers(clubIdParam).then((club) => {
+      if (club) setSourceClub(club);
+    });
+  }, [clubIdParam]);
 
   const fmtDate = (d: Date) =>
     d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
@@ -110,7 +169,11 @@ export default function CreateScreen() {
               <Text style={s.cancelBtn}>Cancel</Text>
             </TouchableOpacity>
           }
-          right={<Text style={s.topBarLabel}>New round</Text>}
+          right={
+            sourceClub
+              ? <Text style={s.topBarLabel}>{sourceClub.name}</Text>
+              : <Text style={s.topBarLabel}>New round</Text>
+          }
         />
       </SafeAreaView>
 
@@ -121,45 +184,51 @@ export default function CreateScreen() {
       >
         {/* ── Green header ── */}
         <View style={s.header}>
+          {/* Editable event name */}
+          <TextInput
+            style={[s.eventName, eventName === 'The Next Round' && s.eventNameDim]}
+            value={eventName}
+            onChangeText={setEventName}
+            returnKeyType="done"
+            selectTextOnFocus
+          />
+          {eventName === 'The Next Round' && (
+            <Text style={s.renameHint}>Tap to rename</Text>
+          )}
+
+          {/* Square cover preview — tap to open full picker */}
+          <TouchableOpacity
+            style={s.coverPreview}
+            onPress={() => setShowPicker(true)}
+            activeOpacity={0.92}
+          >
+            {coverIsVideo
+              ? <VideoCoverPreview source={coverImage} style={s.coverImg} />
+              : <Image source={coverImage} style={s.coverImg} contentFit="cover" />
+            }
+            <View style={s.coverEditBadge}>
+              <Text style={s.coverEditText}>✏ Change</Text>
+            </View>
+          </TouchableOpacity>
+
+          {/* Thumbnail strip — quick swap without opening modal */}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            style={{ marginBottom: 14 }}
-            contentContainerStyle={s.emojiRow}
+            style={s.thumbStrip}
+            contentContainerStyle={s.thumbStripContent}
           >
-            {EMOJIS.map((emoji, i) => (
+            {PRESET_IMAGES.map((img) => (
               <TouchableOpacity
-                key={i}
-                style={[s.emojiBtn, i === emojiIdx && s.emojiBtnSelected]}
-                onPress={() => setEmojiIdx(i)}
-                activeOpacity={0.7}
+                key={img.id}
+                onPress={() => { setCoverImage(img.source); setCoverIsVideo(false); }}
+                activeOpacity={0.8}
+                style={[s.thumb, coverImage === img.source && s.thumbSelected]}
               >
-                <Text style={s.emojiText}>{emoji}</Text>
+                <Image source={img.source} style={s.thumbImg} contentFit="cover" />
               </TouchableOpacity>
             ))}
-            <TouchableOpacity style={s.emojiAdd} activeOpacity={0.7}>
-              <Text style={s.emojiAddText}>+</Text>
-            </TouchableOpacity>
           </ScrollView>
-
-          <Text style={s.eventNamePlaceholder}>Event name...</Text>
-          <Text style={s.metaPreview}>{metaPreview}</Text>
-
-          <View style={s.avatarRow}>
-            <Avatar
-              initials="WK"
-              bg="rgba(216,214,175,0.85)"
-              textColor={Colors.green}
-              size={30}
-              borderColor={Colors.green}
-              borderWidth={2}
-            />
-            {[0, 1, 2].map((i) => (
-              <View key={i} style={s.avatarEmpty}>
-                <Text style={s.avatarEmptyPlus}>+</Text>
-              </View>
-            ))}
-          </View>
         </View>
 
         {/* ── Drawer ── */}
@@ -186,18 +255,31 @@ export default function CreateScreen() {
             </TouchableOpacity>
           </View>
 
+          {/* Poll guests — inline, under date/time */}
+          <TouchableOpacity
+            style={s.pollRow}
+            onPress={() => setPollGuests(!pollGuests)}
+            activeOpacity={0.7}
+          >
+            <Text style={s.pollText}>Not sure on time? Poll your guests</Text>
+            <View style={[s.toggle, pollGuests && s.toggleOn]}>
+              <View style={[s.knob, pollGuests && s.knobOn]} />
+            </View>
+          </TouchableOpacity>
+
           {/* Course, format, spots, cost */}
           <View style={s.fieldStack}>
-            <View style={s.fieldRow}>
-              <Text style={s.fieldLabel}>Course name</Text>
-              <TextInput
-                style={[s.fieldValue, s.inlineInput]}
-                placeholder="Optional"
-                placeholderTextColor="#c8c4b0"
-                returnKeyType="done"
-                textAlign="right"
-              />
-            </View>
+            <TouchableOpacity onPress={() => setShowCourseSearch(true)} activeOpacity={0.7}>
+              <View style={s.fieldRow}>
+                <Text style={s.fieldLabel}>Location</Text>
+                <View style={s.rowRight}>
+                  <Text style={courseName ? s.fieldValue : s.fieldValueDim} numberOfLines={1}>
+                    {courseName || 'Search'}
+                  </Text>
+                  <Text style={s.chevron}>›</Text>
+                </View>
+              </View>
+            </TouchableOpacity>
             <TouchableOpacity onPress={() => setShowFormatModal(true)} activeOpacity={0.7}>
               <View style={s.fieldRow}>
                 <Text style={s.fieldLabel}>Format</Text>
@@ -242,18 +324,8 @@ export default function CreateScreen() {
             </View>
           </View>
 
-          {/* Poll & note */}
+          {/* Note */}
           <View style={s.fieldStack}>
-            <View style={s.fieldRow}>
-              <Text style={s.fieldLabel}>Poll guests</Text>
-              <TouchableOpacity
-                style={[s.toggle, pollGuests && s.toggleOn]}
-                onPress={() => setPollGuests(!pollGuests)}
-                activeOpacity={0.9}
-              >
-                <View style={[s.knob, pollGuests && s.knobOn]} />
-              </TouchableOpacity>
-            </View>
             <TouchableOpacity
               onPress={() => setShowNoteModal(true)}
               activeOpacity={0.7}
@@ -272,7 +344,52 @@ export default function CreateScreen() {
             </TouchableOpacity>
           </View>
 
-          <Button label="Create & invite 🏌️" variant="primary" />
+          <Button
+            label={saving ? 'Creating...' : 'Create & invite 🏌️'}
+            variant="primary"
+            onPress={async () => {
+              if (saving || !profile) return;
+              setSaving(true);
+
+              // Resolve cover ID from source number
+              const allImages = [...PRESET_IMAGES, ...PRESET_GIFS];
+              const matched = allImages.find((i) => i.source === coverImage);
+
+              const round = await createRound({
+                hostId: profile.id,
+                clubId: sourceClub?.id ?? null,
+                title: eventName || null,
+                courseName: courseName || null,
+                format: FORMAT_MAP[FORMATS[formatIdx]],
+                scheduledAt: date && time
+                  ? new Date(
+                      date.getFullYear(), date.getMonth(), date.getDate(),
+                      time.getHours(), time.getMinutes()
+                    ).toISOString()
+                  : null,
+                spots,
+                costCents: cost ? Math.round(parseFloat(cost) * 100) : 0,
+                skinsBetCents: 0,
+                coverImageId: matched?.id ?? null,
+                coverIsVideo,
+                note: note || null,
+                pollGuests,
+                totalHoles: 18,
+                startingHole: 1,
+                pars: DEFAULT_PARS,
+              });
+
+              if (round && sourceClub?.members) {
+                const memberIds = sourceClub.members
+                  .filter((m) => m.user_id !== profile.id && m.status === 'member')
+                  .map((m) => m.user_id);
+                if (memberIds.length > 0) await bulkInviteToRound(round.id, memberIds);
+              }
+
+              setSaving(false);
+              if (round) router.replace(`/manage/${round.id}`);
+            }}
+          />
         </View>
       </ScrollView>
 
@@ -346,6 +463,53 @@ export default function CreateScreen() {
         </View>
       </PickerSheet>
 
+      {/* ── Cover picker ── */}
+      <CoverPickerModal
+        visible={showPicker}
+        current={coverImage}
+        userId={profile?.id}
+        onSelect={(source, isVideo) => { setCoverImage(source); setCoverIsVideo(isVideo); }}
+        onClose={() => setShowPicker(false)}
+      />
+
+      {/* ── Course search modal ── */}
+      <Modal visible={showCourseSearch} animationType="slide" onRequestClose={() => setShowCourseSearch(false)}>
+        <SafeAreaView style={s.courseModal} edges={['top']}>
+          <View style={s.courseModalHeader}>
+            <TouchableOpacity onPress={() => setShowCourseSearch(false)} activeOpacity={0.7}>
+              <Text style={s.courseModalCancel}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={s.courseModalTitle}>Location</Text>
+            <View style={{ width: 56 }} />
+          </View>
+          <GooglePlacesAutocomplete
+            placeholder="Search..."
+            textInputProps={{ autoFocus: true }}
+            fetchDetails={false}
+            enablePoweredByContainer={false}
+            minLength={2}
+            debounce={300}
+            onPress={(data) => {
+              setCourseName(data.structured_formatting?.main_text ?? data.description);
+              setShowCourseSearch(false);
+            }}
+            onFail={(error) => console.log('Places error:', error)}
+            onNotFound={() => console.log('Places: no results')}
+            query={{ key: GOOGLE_PLACES_KEY, language: 'en' }}
+            styles={{
+              container: { flex: 1 },
+              textInputContainer: s.courseInputContainer,
+              textInput: s.courseInput,
+              listView: s.courseList,
+              row: s.courseRow,
+              description: s.courseRowText,
+              separator: s.courseRowSep,
+              poweredContainer: { display: 'none' },
+            }}
+          />
+        </SafeAreaView>
+      </Modal>
+
       {/* ── Note modal ── */}
       <Modal
         visible={showNoteModal}
@@ -410,59 +574,65 @@ const s = StyleSheet.create({
   header: {
     backgroundColor: Colors.green,
     paddingHorizontal: 18,
-    paddingBottom: 26,
+    paddingBottom: 18,
   },
-  emojiRow: { flexDirection: 'row', gap: 7 },
-  emojiBtn: {
-    width: 52,
-    height: 46,
-    borderRadius: 10,
-    backgroundColor: 'rgba(216,214,175,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emojiBtnSelected: {
-    backgroundColor: 'rgba(0,0,0,0.2)',
-    borderWidth: 2,
-    borderColor: Colors.cream,
-  },
-  emojiText: { fontSize: 22 },
-  emojiAdd: {
-    width: 52,
-    height: 46,
-    borderRadius: 10,
-    backgroundColor: 'rgba(216,214,175,0.05)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(216,214,175,0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emojiAddText: { fontSize: 16, color: 'rgba(216,214,175,0.3)' },
 
-  eventNamePlaceholder: {
+  // Event name
+  eventName: {
     fontFamily: Fonts.serifMedium,
-    fontSize: 22,
-    color: 'rgba(216,214,175,0.35)',
-    marginBottom: 4,
+    fontStyle: 'italic',
+    fontSize: 26,
+    color: Colors.cream,
+    marginBottom: 2,
+    paddingVertical: 0,
   },
-  metaPreview: {
+  eventNameDim: {
+    color: 'rgba(216,214,175,0.4)',
+  },
+  renameHint: {
     fontFamily: Fonts.sans,
-    fontSize: 12,
-    color: 'rgba(216,214,175,0.45)',
+    fontSize: 11,
+    color: 'rgba(216,214,175,0.5)',
     marginBottom: 12,
   },
-  avatarRow: { flexDirection: 'row', gap: 5 },
-  avatarEmpty: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: 'rgba(216,214,175,0.08)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(216,214,175,0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
+
+  // Cover preview
+  coverPreview: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 14,
+    overflow: 'hidden',
+    marginBottom: 10,
   },
-  avatarEmptyPlus: { fontSize: 14, color: 'rgba(216,214,175,0.2)' },
+  coverImg: { width: '100%', height: '100%' },
+  coverEditBadge: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  coverEditText: {
+    fontFamily: Fonts.sansMedium,
+    fontSize: 12,
+    color: '#fff',
+  },
+
+  // Thumbnail strip
+  thumbStrip: { marginHorizontal: -4 },
+  thumbStripContent: { gap: 8, paddingHorizontal: 4 },
+  thumb: {
+    width: 56,
+    height: 56,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  thumbSelected: { borderColor: Colors.cream },
+  thumbImg: { width: '100%', height: '100%' },
 
   // Drawer
   drawer: {
@@ -534,6 +704,13 @@ const s = StyleSheet.create({
     textAlign: 'center',
   },
 
+  // Poll guests inline row
+  pollRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 4, paddingVertical: 10, marginBottom: 4,
+  },
+  pollText: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted, flex: 1 },
+
   // Toggle
   toggle: { width: 30, height: 17, backgroundColor: '#d4d0bc', borderRadius: 20 },
   toggleOn: { backgroundColor: Colors.green },
@@ -589,6 +766,36 @@ const s = StyleSheet.create({
   formatOptionText: { fontFamily: Fonts.sans, fontSize: 16, color: Colors.text },
   formatOptionActive: { fontFamily: Fonts.sansMedium, color: Colors.green },
   checkmark: { fontFamily: Fonts.sansMedium, fontSize: 16, color: Colors.green },
+
+  // Course search modal
+  courseModal: { flex: 1, backgroundColor: Colors.bg },
+  courseModalHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderBottomWidth: 0.5, borderBottomColor: Colors.border,
+  },
+  courseModalTitle: { fontFamily: Fonts.sansMedium, fontSize: 15, color: Colors.text  },
+  courseModalCancel: { fontFamily: Fonts.sans, fontSize: 15, color: Colors.green, width: 56 },
+  courseInputContainer: {
+    backgroundColor: Colors.bg,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 0.5,
+    borderBottomColor: Colors.border,
+  },
+  courseInput: {
+    fontFamily: Fonts.sans,
+    fontSize: 15,
+    color: Colors.text,
+    backgroundColor: Colors.creamLight,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    height: 42,
+  },
+  courseList: { backgroundColor: Colors.bg },
+  courseRow: { paddingHorizontal: 16, paddingVertical: 14, backgroundColor: Colors.bg },
+  courseRowText: { fontFamily: Fonts.sans, fontSize: 14, color: Colors.text },
+  courseRowSep: { height: 0.5, backgroundColor: Colors.border, marginHorizontal: 16 },
 
   // Note sheet
   noteSheet: { paddingBottom: 0 },

@@ -1,48 +1,31 @@
-import { useRouter } from 'expo-router';
-import React from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Avatar } from '@/components/Avatar';
 import { TopBar } from '@/components/TopBar';
 import { Colors, Fonts, Spacing } from '@/constants/theme';
+import { getRoundWithPlayers, getScores, getHoles, finalizeRound, updateRoundStatus } from '@/lib/db';
+import { notifyRoundsChanged } from '@/lib/roundsRefresh';
+import type { Round, RoundPlayer, Score, Hole } from '@/lib/database.types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface Player {
-  id: string;
-  initials: string;
-  bg: string;
-  textColor: string;
-  name: string;
+interface Standing {
+  player: RoundPlayer;
+  strokes: number;
+  diff: number;
+  rank: number;
+  holesPlayed: number;
 }
-
-// ─── Mock data ────────────────────────────────────────────────────────────────
-
-const ROUND = {
-  course: 'Cog Hill No. 4 🌿',
-  meta: 'Stroke play · Sat May 17 · 18 holes',
-};
-
-const PLAYERS: Player[] = [
-  { id: 'wk', initials: 'WK', bg: Colors.creamLight, textColor: Colors.green, name: 'Wyatt K.' },
-  { id: 'mr', initials: 'MR', bg: '#c8a96e', textColor: '#fff', name: 'Mike R.' },
-  { id: 'dk', initials: 'DK', bg: '#5a8a5a', textColor: '#fff', name: 'Dave K.' },
-  { id: 'pw', initials: 'PW', bg: '#7a6a9a', textColor: '#fff', name: 'Pete W.' },
-];
-
-const RESULTS = [
-  { player: PLAYERS[2], strokes: 74, diff: 2, rank: 1 },
-  { player: PLAYERS[0], strokes: 76, diff: 4, rank: 2 },
-  { player: PLAYERS[1], strokes: 79, diff: 7, rank: 3 },
-  { player: PLAYERS[3], strokes: 81, diff: 9, rank: 4 },
-];
-
-const HIGHLIGHTS = [
-  { label: 'Low round', value: '74', sub: 'Dave K.' },
-  { label: 'Eagle', value: '3', sub: 'Wyatt K. · #2' },
-  { label: 'Most birdies', value: '4 🐦', sub: 'Dave K.' },
-];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -59,40 +42,64 @@ function toParColor(diff: number): string {
   return '#b04030';
 }
 
+function calcStandings(players: RoundPlayer[], scores: Score[], holes: Hole[], totalHoles: number): Standing[] {
+  const parMap: Record<number, number> = {};
+  for (const h of holes) parMap[h.hole_number] = h.par;
+  const defaultPar = 4;
+
+  return players
+    .map((p) => {
+      const playerScores = scores.filter((s) => s.player_id === p.player_id);
+      const strokes = playerScores.reduce((sum, s) => sum + (s.strokes ?? 0), 0);
+      const totalPar = playerScores.reduce((sum, s) => sum + (parMap[s.hole_number] ?? defaultPar), 0);
+      const diff = strokes > 0 ? strokes - totalPar : 0;
+      return { player: p, strokes, diff, rank: 0, holesPlayed: playerScores.filter((s) => s.strokes != null).length };
+    })
+    .sort((a, b) => {
+      if (a.holesPlayed === 0 && b.holesPlayed === 0) return 0;
+      if (a.holesPlayed === 0) return 1;
+      if (b.holesPlayed === 0) return -1;
+      return a.strokes - b.strokes;
+    })
+    .map((s, i) => ({ ...s, rank: i + 1 }));
+}
+
+function fmtDate(iso: string) {
+  return new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function ResultRow({
-  player, strokes, diff, rank, showBorder,
-}: {
-  player: Player; strokes: number; diff: number; rank: number; showBorder: boolean;
-}) {
+function ResultRow({ standing, showBorder }: { standing: Standing; showBorder: boolean }) {
+  const { player, strokes, diff, rank, holesPlayed } = standing;
+  const profile = (player as any).profile;
   const isWinner = rank === 1;
+  const noScore = holesPlayed === 0;
+
   return (
     <View style={[s.resultRow, showBorder && s.resultRowBorder]}>
       <Text style={[s.resultRank, isWinner && s.resultRankWinner]}>{rank === 1 ? '🏆' : rank}</Text>
       <Avatar
-        initials={player.initials}
-        bg={player.bg}
-        textColor={player.textColor}
+        initials={profile?.initials ?? '?'}
+        bg={profile?.avatar_color ?? Colors.green}
+        textColor={profile?.avatar_text_color ?? Colors.cream}
         size={30}
         borderWidth={0}
         borderColor="transparent"
       />
-      <Text style={[s.resultName, isWinner && s.resultNameWinner]}>{player.name}</Text>
+      <Text style={[s.resultName, isWinner && s.resultNameWinner]}>
+        {profile?.name ?? 'Player'}
+      </Text>
       <View style={s.resultRight}>
-        <Text style={[s.resultDiff, { color: toParColor(diff) }]}>{toParLabel(diff)}</Text>
-        <Text style={s.resultStrokes}>{strokes}</Text>
+        {noScore ? (
+          <Text style={s.resultStrokes}>—</Text>
+        ) : (
+          <>
+            <Text style={[s.resultDiff, { color: toParColor(diff) }]}>{toParLabel(diff)}</Text>
+            <Text style={s.resultStrokes}>{strokes}</Text>
+          </>
+        )}
       </View>
-    </View>
-  );
-}
-
-function HighlightTile({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return (
-    <View style={s.highlight}>
-      <Text style={s.highlightValue}>{value}</Text>
-      <Text style={s.highlightLabel}>{label}</Text>
-      <Text style={s.highlightSub}>{sub}</Text>
     </View>
   );
 }
@@ -100,9 +107,65 @@ function HighlightTile({ label, value, sub }: { label: string; value: string; su
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function PostRoundScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const winner = RESULTS[0];
+
+  const [round, setRound] = useState<(Round & { players: RoundPlayer[] }) | null>(null);
+  const [standings, setStandings] = useState<Standing[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [completing, setCompleting] = useState(false);
+
+  useEffect(() => {
+    if (!id) { setLoading(false); return; }
+    Promise.all([getRoundWithPlayers(id), getScores(id), getHoles(id)]).then(([r, scores, holes]) => {
+      if (!r) { setLoading(false); return; }
+      setRound(r);
+      const players = (r.players as RoundPlayer[]).filter((p) => p.rsvp === 'in');
+      setStandings(calcStandings(players, scores, holes, r.total_holes));
+      setLoading(false);
+    });
+  }, [id]);
+
+  async function handleDone() {
+    if (!id) return;
+    setCompleting(true);
+    if (round && round.status !== 'completed') {
+      const playerIds = (round.players as RoundPlayer[])
+        .filter((p) => p.rsvp === 'in')
+        .map((p) => p.player_id);
+      await finalizeRound(id, playerIds, round.host_id, round.scheduled_at);
+    } else if (!round || round.status !== 'completed') {
+      await updateRoundStatus(id, 'completed');
+    }
+    notifyRoundsChanged();
+    router.replace('/' as any);
+  }
+
+  if (loading) {
+    return (
+      <View style={[s.root, { alignItems: 'center', justifyContent: 'center' }]}>
+        <ActivityIndicator color={Colors.cream} />
+      </View>
+    );
+  }
+
+  if (!round) {
+    return (
+      <View style={[s.root, { alignItems: 'center', justifyContent: 'center', padding: 32 }]}>
+        <Text style={{ fontFamily: Fonts.serifMedium, fontSize: 20, color: Colors.cream }}>Round not found</Text>
+      </View>
+    );
+  }
+
+  const winner = standings[0];
+  const winnerProfile = winner ? (winner.player as any).profile : null;
+
+  const meta = [
+    round.format.charAt(0).toUpperCase() + round.format.slice(1),
+    round.scheduled_at ? fmtDate(round.scheduled_at) : null,
+    `${round.total_holes} holes`,
+  ].filter(Boolean).join(' · ');
 
   return (
     <View style={s.root}>
@@ -113,7 +176,11 @@ export default function PostRoundScreen() {
               <Text style={s.backBtn}>← Back</Text>
             </TouchableOpacity>
           }
-          right={<Text style={s.doneBtn} onPress={() => router.replace('/')}>Done</Text>}
+          right={
+            <TouchableOpacity onPress={handleDone} activeOpacity={0.7} disabled={completing}>
+              <Text style={s.doneBtn}>{completing ? 'Saving...' : 'Done'}</Text>
+            </TouchableOpacity>
+          }
         />
       </SafeAreaView>
 
@@ -123,59 +190,44 @@ export default function PostRoundScreen() {
       >
         {/* ── Green header ── */}
         <View style={s.header}>
-          <View style={s.winnerBox}>
-            <Avatar
-              initials={winner.player.initials}
-              bg={winner.player.bg}
-              textColor={winner.player.textColor}
-              size={56}
-              borderColor={Colors.green}
-              borderWidth={3}
-            />
-            <Text style={s.winnerName}>{winner.player.name}</Text>
-            <Text style={s.winnerScore}>
-              {winner.strokes} · {toParLabel(winner.diff)}
-            </Text>
-            <Text style={s.winnerTag}>wins the round 🏆</Text>
-          </View>
-
-          <Text style={s.courseName}>{ROUND.course}</Text>
-          <Text style={s.meta}>{ROUND.meta}</Text>
+          {winner && winner.holesPlayed > 0 && (
+            <View style={s.winnerBox}>
+              <Avatar
+                initials={winnerProfile?.initials ?? '?'}
+                bg={winnerProfile?.avatar_color ?? Colors.green}
+                textColor={winnerProfile?.avatar_text_color ?? Colors.cream}
+                size={56}
+                borderColor={Colors.green}
+                borderWidth={3}
+              />
+              <Text style={s.winnerName}>{winnerProfile?.name ?? 'Player'}</Text>
+              <Text style={s.winnerScore}>
+                {winner.strokes} · {toParLabel(winner.diff)}
+              </Text>
+              <Text style={s.winnerTag}>wins the round 🏆</Text>
+            </View>
+          )}
+          <Text style={s.courseName}>{round.course_name ?? 'Golf Round'}</Text>
+          <Text style={s.metaText}>{meta}</Text>
         </View>
 
         {/* ── Drawer ── */}
         <View style={s.drawer}>
           <View style={s.handle} />
 
-          {/* Final standings */}
           <Text style={s.sectionLabel}>Final standings</Text>
           <View style={s.card}>
-            {RESULTS.map((r, i) => (
-              <ResultRow
-                key={r.player.id}
-                player={r.player}
-                strokes={r.strokes}
-                diff={r.diff}
-                rank={r.rank}
-                showBorder={i < RESULTS.length - 1}
-              />
-            ))}
+            {standings.length > 0 ? standings.map((st, i) => (
+              <ResultRow key={st.player.id} standing={st} showBorder={i < standings.length - 1} />
+            )) : (
+              <View style={{ padding: 20, alignItems: 'center' }}>
+                <Text style={{ fontFamily: Fonts.sans, fontSize: 14, color: Colors.muted }}>No scores recorded</Text>
+              </View>
+            )}
           </View>
 
-          {/* Highlights */}
-          <Text style={[s.sectionLabel, { marginBottom: 10 }]}>Highlights ⚡</Text>
-          <View style={s.highlightRow}>
-            {HIGHLIGHTS.map((h) => (
-              <HighlightTile key={h.label} label={h.label} value={h.value} sub={h.sub} />
-            ))}
-          </View>
-
-          {/* CTAs */}
-          <TouchableOpacity style={s.shareBtn} activeOpacity={0.7}>
-            <Text style={s.shareBtnText}>Share scorecard 🔗</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => router.replace('/')} activeOpacity={0.7}>
-            <Text style={s.homeLink}>Back to home</Text>
+          <TouchableOpacity onPress={handleDone} style={s.homeBtn} activeOpacity={0.7} disabled={completing}>
+            <Text style={s.homeBtnText}>{completing ? 'Saving...' : 'Back to home'}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -188,62 +240,17 @@ export default function PostRoundScreen() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.green },
 
-  backBtn: {
-    fontFamily: Fonts.sans,
-    fontSize: 13,
-    color: 'rgba(216,214,175,0.6)',
-  },
-  doneBtn: {
-    fontFamily: Fonts.sans,
-    fontSize: 13,
-    color: 'rgba(216,214,175,0.6)',
-  },
+  backBtn: { fontFamily: Fonts.sans, fontSize: 13, color: 'rgba(216,214,175,0.6)' },
+  doneBtn: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.cream },
 
-  // Header
-  header: {
-    backgroundColor: Colors.green,
-    paddingHorizontal: 18,
-    paddingBottom: 30,
-    alignItems: 'flex-start',
-  },
-  winnerBox: {
-    alignSelf: 'center',
-    alignItems: 'center',
-    marginBottom: 24,
-    marginTop: 8,
-  },
-  winnerName: {
-    fontFamily: Fonts.serifMedium,
-    fontSize: 26,
-    color: Colors.cream,
-    marginTop: 10,
-    marginBottom: 2,
-  },
-  winnerScore: {
-    fontFamily: Fonts.sans,
-    fontSize: 14,
-    color: 'rgba(216,214,175,0.7)',
-    marginBottom: 6,
-  },
-  winnerTag: {
-    fontFamily: Fonts.sansMedium,
-    fontSize: 12,
-    color: 'rgba(216,214,175,0.5)',
-    letterSpacing: 0.5,
-  },
-  courseName: {
-    fontFamily: Fonts.serifMedium,
-    fontSize: 19,
-    color: Colors.cream,
-    marginBottom: 3,
-  },
-  meta: {
-    fontFamily: Fonts.sans,
-    fontSize: 13,
-    color: 'rgba(216,214,175,0.6)',
-  },
+  header: { backgroundColor: Colors.green, paddingHorizontal: 18, paddingBottom: 30, alignItems: 'flex-start' },
+  winnerBox: { alignSelf: 'center', alignItems: 'center', marginBottom: 24, marginTop: 8 },
+  winnerName: { fontFamily: Fonts.serifMedium, fontSize: 26, color: Colors.cream, marginTop: 10, marginBottom: 2 },
+  winnerScore: { fontFamily: Fonts.sans, fontSize: 14, color: 'rgba(216,214,175,0.7)', marginBottom: 6 },
+  winnerTag: { fontFamily: Fonts.sansMedium, fontSize: 12, color: 'rgba(216,214,175,0.5)', letterSpacing: 0.5 },
+  courseName: { fontFamily: Fonts.serifMedium, fontSize: 19, color: Colors.cream, marginBottom: 3 },
+  metaText: { fontFamily: Fonts.sans, fontSize: 13, color: 'rgba(216,214,175,0.6)' },
 
-  // Drawer
   drawer: {
     backgroundColor: Colors.bg,
     borderTopLeftRadius: 24,
@@ -252,136 +259,31 @@ const s = StyleSheet.create({
     paddingTop: 22,
     paddingHorizontal: 16,
   },
-  handle: {
-    width: 32,
-    height: 3,
-    backgroundColor: '#d8d4c0',
-    borderRadius: 4,
-    alignSelf: 'center',
-    marginBottom: 16,
-  },
+  handle: { width: 32, height: 3, backgroundColor: '#d8d4c0', borderRadius: 4, alignSelf: 'center', marginBottom: 16 },
   sectionLabel: {
-    fontFamily: Fonts.sansSemiBold,
-    fontSize: 10,
-    color: Colors.muted,
-    textTransform: 'uppercase',
-    letterSpacing: 1.2,
-    marginBottom: 10,
+    fontFamily: Fonts.sansSemiBold, fontSize: 10, color: Colors.muted,
+    textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 10,
   },
 
-  // Results card
   card: {
-    backgroundColor: Colors.card,
-    borderRadius: 14,
-    borderWidth: 0.5,
-    borderColor: Colors.border,
-    paddingHorizontal: 14,
-    marginBottom: 20,
+    backgroundColor: Colors.card, borderRadius: 14,
+    borderWidth: 0.5, borderColor: Colors.border,
+    paddingHorizontal: 14, marginBottom: 20,
   },
-  resultRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    gap: 10,
-  },
-  resultRowBorder: {
-    borderBottomWidth: 0.5,
-    borderBottomColor: Colors.border,
-  },
-  resultRank: {
-    fontFamily: Fonts.sansSemiBold,
-    fontSize: 12,
-    color: Colors.muted,
-    width: 20,
-    textAlign: 'center',
-  },
+  resultRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 10 },
+  resultRowBorder: { borderBottomWidth: 0.5, borderBottomColor: Colors.border },
+  resultRank: { fontFamily: Fonts.sansSemiBold, fontSize: 12, color: Colors.muted, width: 20, textAlign: 'center' },
   resultRankWinner: { fontSize: 16 },
-  resultName: {
-    fontFamily: Fonts.sansMedium,
-    fontSize: 14,
-    color: Colors.text,
-    flex: 1,
-  },
-  resultNameWinner: {
-    fontFamily: Fonts.sansSemiBold,
-    color: Colors.text,
-  },
-  resultRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  resultDiff: {
-    fontFamily: Fonts.serifMedium,
-    fontSize: 20,
-    minWidth: 28,
-    textAlign: 'right',
-  },
-  resultStrokes: {
-    fontFamily: Fonts.sans,
-    fontSize: 12,
-    color: Colors.muted,
-    width: 24,
-    textAlign: 'right',
-  },
+  resultName: { fontFamily: Fonts.sansMedium, fontSize: 14, color: Colors.text, flex: 1 },
+  resultNameWinner: { fontFamily: Fonts.sansSemiBold, color: Colors.text },
+  resultRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  resultDiff: { fontFamily: Fonts.serifMedium, fontSize: 20, minWidth: 28, textAlign: 'right' },
+  resultStrokes: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted, width: 24, textAlign: 'right' },
 
-  // Highlights
-  highlightRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 20,
+  homeBtn: {
+    backgroundColor: Colors.card, borderRadius: 14,
+    borderWidth: 0.5, borderColor: Colors.border,
+    padding: 15, alignItems: 'center', marginBottom: 12,
   },
-  highlight: {
-    flex: 1,
-    backgroundColor: Colors.card,
-    borderRadius: 12,
-    borderWidth: 0.5,
-    borderColor: Colors.border,
-    padding: 12,
-    alignItems: 'center',
-  },
-  highlightValue: {
-    fontFamily: Fonts.serifMedium,
-    fontSize: 22,
-    color: Colors.text,
-    marginBottom: 2,
-  },
-  highlightLabel: {
-    fontFamily: Fonts.sansSemiBold,
-    fontSize: 9,
-    color: Colors.muted,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: 3,
-  },
-  highlightSub: {
-    fontFamily: Fonts.sans,
-    fontSize: 10,
-    color: Colors.muted,
-    textAlign: 'center',
-  },
-
-  // CTAs
-  shareBtn: {
-    backgroundColor: Colors.card,
-    borderRadius: 14,
-    borderWidth: 0.5,
-    borderColor: Colors.border,
-    padding: 15,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  shareBtnText: {
-    fontFamily: Fonts.sansMedium,
-    fontSize: 14,
-    color: Colors.text,
-  },
-  homeLink: {
-    fontFamily: Fonts.sans,
-    fontSize: 13,
-    color: Colors.muted,
-    textAlign: 'center',
-    textDecorationLine: 'underline',
-    paddingVertical: 4,
-  },
+  homeBtnText: { fontFamily: Fonts.sansMedium, fontSize: 14, color: Colors.text },
 });

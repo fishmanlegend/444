@@ -1,0 +1,212 @@
+export type RoundFormat = 'stroke' | 'skins' | 'stableford' | 'match' | 'other';
+export type RoundStatus = 'upcoming' | 'active' | 'completed' | 'cancelled';
+export type RsvpStatus  = 'in' | 'maybe' | 'out' | 'pending';
+
+export interface Profile {
+  id: string;
+  phone: string;
+  name: string | null;
+  handle: string | null;
+  initials: string | null;
+  avatar_color: string;
+  avatar_text_color: string;
+  location: string | null;
+  bio: string | null;
+  avatar_url: string | null;
+  instagram_handle: string | null;
+  venmo_handle: string | null;
+  snapchat_handle: string | null;
+  // ── Badge stats ────────────────────────────────────────────────────────────
+  rounds_played: number;
+  rounds_hosted: number;
+  pals_count: number;
+  streak_weeks: number;
+  last_round_week: string | null;      // ISO date, for streak calc
+  skins_won: number;
+  biggest_skins_pot: number;
+  early_bird_rounds: number;           // tee time before 8am
+  clubs_joined: number;
+  introductions: number;               // plus_one badge
+  connectors: number;
+  rivalries: number;
+  regular_group_rounds: number;        // rounds with the same group
+  guest_rounds: number;
+  large_rounds_hosted: number;         // rounds with 8+ players
+  unique_groups_hosted: number;
+  courses_played: number;
+  cities_played: number;
+  reunions: number;                    // played same course 3+ times
+  eagles_made: number;
+  birdies_made: number;
+  glue_rounds: number;                 // rounds where you invited the most people
+  scorecards_kept: number;
+  photos_shared: number;
+  best_score: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Round {
+  id: string;
+  host_id: string;
+  club_id: string | null;
+  title: string | null;
+  course_name: string | null;
+  format: RoundFormat;
+  scheduled_at: string | null;
+  spots: number;
+  cost_cents: number;
+  skins_bet_cents: number;
+  cover_image_id: string | null;
+  cover_is_video: boolean;
+  note: string | null;
+  poll_guests: boolean;
+  total_holes: number;
+  starting_hole: number;
+  status: RoundStatus;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface Hole {
+  round_id: string;
+  hole_number: number;
+  par: number;
+  yardage: number | null;
+}
+
+export interface RoundPlayer {
+  id: string;
+  round_id: string;
+  player_id: string;
+  rsvp: RsvpStatus;
+  is_host: boolean;
+  joined_at: string;
+  // joined via select
+  profile?: Profile;
+}
+
+export interface Score {
+  round_id: string;
+  player_id: string;
+  hole_number: number;
+  strokes: number | null;
+  recorded_at: string;
+}
+
+export interface SkinsResult {
+  round_id: string;
+  hole_number: number;
+  winner_id: string | null;
+  pot_value: number;
+}
+
+export interface Pal {
+  user_a_id: string;
+  user_b_id: string;
+  rounds_together: number;
+  invites_together: number;
+  created_at: string;
+  // joined via select
+  profile?: Profile;
+}
+
+export interface RoundComment {
+  id: string;
+  round_id: string;
+  user_id: string;
+  body: string;
+  created_at: string;
+  profile?: Profile;
+}
+
+export interface GuestRsvp {
+  id: string;
+  round_id: string;
+  name: string;
+  phone: string | null;
+  rsvp: 'in' | 'maybe' | 'out';
+  created_at: string;
+}
+
+export interface MatchTeam {
+  round_id: string;
+  player_id: string;
+  team: 'a' | 'b';
+}
+
+export interface MatchHole {
+  round_id: string;
+  hole_number: number;
+  result: 'a' | 'b' | 'halve' | null;
+}
+
+export interface Club {
+  id: string;
+  name: string;
+  created_by: string;
+  banner_image_id: string | null;
+  banner_is_video: boolean;
+  only_host_can_create_rounds: boolean;
+  created_at: string;
+  // joined
+  members?: ClubMember[];
+  nextRound?: Round | null;
+}
+
+export interface ClubPost {
+  id: string;
+  club_id: string;
+  author_id: string;
+  body: string;
+  created_at: string;
+  // joined
+  profile?: Profile;
+}
+
+export interface ClubMember {
+  id: string;
+  club_id: string;
+  user_id: string;
+  added_by: string | null;
+  joined_at: string;
+  status: 'pending' | 'member';
+  // joined
+  profile?: Profile;
+}
+
+// ── Supabase Database shape ────────────────────────────────────────────────────
+
+type R = Record<string, unknown>;
+
+type DbRel = {
+  foreignKeyName: string; columns: string[]; isOneToOne: boolean;
+  referencedRelation: string; referencedColumns: string[];
+};
+
+export type Database = {
+  public: {
+    Tables: {
+      profiles:           { Row: Profile      & R; Insert: (Partial<Profile> & { id: string; phone: string }) & R; Update: Partial<Profile>    & R; Relationships: DbRel[] };
+      rounds:             { Row: Round        & R; Insert: Omit<Round, 'id' | 'created_at'>                  & R; Update: Partial<Round>       & R; Relationships: DbRel[] };
+      holes:              { Row: Hole         & R; Insert: Hole                                               & R; Update: Partial<Hole>        & R; Relationships: DbRel[] };
+      round_players:      { Row: RoundPlayer  & R; Insert: Omit<RoundPlayer, 'id' | 'joined_at' | 'profile'> & R; Update: Partial<RoundPlayer> & R; Relationships: DbRel[] };
+      scores:             { Row: Score        & R; Insert: Score                                              & R; Update: Partial<Score>       & R; Relationships: DbRel[] };
+      skins_results:      { Row: SkinsResult  & R; Insert: SkinsResult                                        & R; Update: Partial<SkinsResult> & R; Relationships: DbRel[] };
+      pals:               { Row: Pal          & R; Insert: Omit<Pal, 'created_at' | 'profile'>                & R; Update: Partial<Pal>         & R; Relationships: DbRel[] };
+      clubs:              { Row: Club         & R; Insert: Omit<Club, 'id' | 'created_at' | 'members'>                       & R; Update: Partial<Club>        & R; Relationships: DbRel[] };
+      club_members:       { Row: ClubMember   & R; Insert: Omit<ClubMember, 'id' | 'joined_at' | 'profile'>               & R; Update: Partial<ClubMember>  & R; Relationships: DbRel[] };
+      club_posts:         { Row: ClubPost     & R; Insert: Omit<ClubPost, 'id' | 'created_at' | 'profile'>                & R; Update: Partial<ClubPost>    & R; Relationships: DbRel[] };
+      match_teams:        { Row: MatchTeam    & R; Insert: MatchTeam                                          & R; Update: Partial<MatchTeam>   & R; Relationships: DbRel[] };
+      match_holes:        { Row: MatchHole    & R; Insert: MatchHole                                          & R; Update: Partial<MatchHole>   & R; Relationships: DbRel[] };
+      guest_rsvps:        { Row: GuestRsvp    & R; Insert: Omit<GuestRsvp, 'id' | 'created_at'>               & R; Update: Partial<GuestRsvp>   & R; Relationships: DbRel[] };
+      round_comments:     { Row: RoundComment & R; Insert: Omit<RoundComment, 'id' | 'created_at' | 'profile'> & R; Update: Partial<RoundComment> & R; Relationships: DbRel[] };
+      cover_image_stats:  { Row: { image_id: string; pick_count: number; updated_at: string } & R; Insert: { image_id: string; pick_count?: number } & R; Update: { pick_count?: number } & R; Relationships: DbRel[] };
+      user_cover_picks:   { Row: { user_id: string; image_id: string; pick_count: number }    & R; Insert: { user_id: string; image_id: string; pick_count?: number } & R; Update: { pick_count?: number } & R; Relationships: DbRel[] };
+    };
+    Views:          { [_ in never]: never };
+    Functions:      { [_ in never]: never };
+    Enums:          { [_ in never]: never };
+    CompositeTypes: { [_ in never]: never };
+  };
+};
