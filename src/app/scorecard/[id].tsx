@@ -19,8 +19,10 @@ import { Avatar } from '@/components/Avatar';
 import { TopBar } from '@/components/TopBar';
 import { Colors, Fonts } from '@/constants/theme';
 import { useAuth } from '@/context/auth';
-import { getRoundWithPlayers, getHoles, getMatchTeams, getMatchHoles, upsertMatchHole } from '@/lib/db';
-import type { RoundFormat, MatchTeam, MatchHole } from '@/lib/database.types';
+import { getRoundWithPlayers, getHoles, getMatchTeams, getMatchHoles, upsertMatchHole, upsertScore, upsertTempScore, getScores, getTempScores, upsertHole } from '@/lib/db';
+import { EditPlayersSheet } from '@/components/EditPlayersSheet';
+import { trackOthersStore } from '@/lib/trackOthersStore';
+import type { RoundFormat, MatchTeam, MatchHole, Hole } from '@/lib/database.types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,6 +32,7 @@ interface Player {
   bg: string;
   textColor: string;
   name: string;
+  isTempPlayer: boolean;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -39,7 +42,7 @@ const PAR_CHIPS = [3, 4, 5] as const;
 const TAB_ITEM_WIDTH = 40;
 
 const FORMAT_LABEL: Record<RoundFormat, string> = {
-  stroke: 'Stroke', skins: 'Skins', stableford: 'Stableford', match: 'Match', other: 'Other',
+  stroke: 'Stroke', skins: 'Skins', stableford: 'Stableford', match: 'Match', best_ball: 'Best ball', other: 'Other',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -157,10 +160,12 @@ function YardageRow({
   defaultValue,
   isConfirmed,
   onChangeText,
+  onBlur,
 }: {
   defaultValue: string;
   isConfirmed: boolean;
   onChangeText: (t: string) => void;
+  onBlur?: () => void;
 }) {
   return (
     <View style={s.infoRow}>
@@ -170,12 +175,13 @@ function YardageRow({
         defaultValue={defaultValue}
         onChangeText={onChangeText}
         keyboardType="numeric"
-        placeholder={`${DEFAULT_YARDAGE}`}
+        placeholder={`e.g., ${DEFAULT_YARDAGE}`}
         placeholderTextColor={Colors.muted}
         textAlign="right"
         maxLength={4}
         returnKeyType="done"
         onSubmitEditing={() => Keyboard.dismiss()}
+        onBlur={onBlur}
       />
     </View>
   );
@@ -283,7 +289,7 @@ function TrackOthersToggle({ open, onToggle }: { open: boolean; onToggle: () => 
   return (
     <TouchableOpacity onPress={onToggle} activeOpacity={0.7} style={s.trackToggle}>
       <Text style={s.trackToggleText}>
-        {open ? 'Hide others ▴' : 'Track for others ▾'}
+        {open ? 'Hide others ▾' : 'Track for others ▴'}
       </Text>
     </TouchableOpacity>
   );
@@ -318,8 +324,14 @@ export default function ScorecardScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { session } = useAuth();
+  const userId = session?.user.id ?? (__DEV__ ? '46bae3d3-2c18-450e-b267-f36b91a94a31' : null);
   const holeTabsRef = useRef<ScrollView>(null);
   const isFirstRender = useRef(true);
+  const dbHolesRef = useRef<Hole[]>([]);
+
+  const [phase, setPhase] = useState<'setup' | 'playing'>('setup');
+  const [holeMode, setHoleMode] = useState<'9' | '18' | '36' | 'custom'>('18');
+  const [customHoleText, setCustomHoleText] = useState('');
 
   const [players, setPlayers] = useState<Player[]>([]);
   const [me, setMe] = useState<Player | null>(null);
@@ -331,7 +343,7 @@ export default function ScorecardScreen() {
   const [loading, setLoading] = useState(true);
 
   const [activeHole, setActiveHole] = useState(1);
-  const [trackOthers, setTrackOthers] = useState(false);
+  const [trackOthers, setTrackOthers] = useState(() => trackOthersStore.get(id ?? ''));
   const [format, setFormat] = useState<RoundFormat>('stroke');
 
   const [holePars, setHolePars] = useState<Record<number, number | null>>({});
@@ -340,6 +352,29 @@ export default function ScorecardScreen() {
 
   const [matchTeams, setMatchTeams] = useState<MatchTeam[]>([]);
   const [matchHoleResults, setMatchHoleResults] = useState<Record<number, 'a' | 'b' | 'halve' | null>>({});
+  const [hostId, setHostId] = useState('');
+  const [showEditSheet, setShowEditSheet] = useState(false);
+
+  function buildPlayerList(rawPlayers: any[]): Player[] {
+    return rawPlayers
+      .filter((p) => p.rsvp === 'in' || p.temp_player_id != null)
+      .map((p) => {
+        if (p.temp_player_id) {
+          const tp = p.temp_player;
+          const name = tp?.name ?? 'Guest';
+          const initials = name.split(/\s+/).map((w: string) => w[0]?.toUpperCase() ?? '').slice(0, 2).join('') || '?';
+          return { id: tp?.id ?? p.temp_player_id, name, initials, bg: '#7a7060', textColor: '#fff', isTempPlayer: true };
+        }
+        return {
+          id: p.player_id,
+          name: p.profile?.name ?? 'Player',
+          initials: p.profile?.initials ?? '?',
+          bg: p.profile?.avatar_color ?? Colors.creamLight,
+          textColor: p.profile?.avatar_text_color ?? Colors.green,
+          isTempPlayer: false,
+        };
+      });
+  }
 
   useEffect(() => {
     if (!id) { setLoading(false); return; }
@@ -348,18 +383,9 @@ export default function ScorecardScreen() {
       const [round, holes] = await Promise.all([getRoundWithPlayers(id), getHoles(id)]);
       if (!round) { setLoading(false); return; }
 
-      const userId = session?.user.id ?? (__DEV__ ? '46bae3d3-2c18-450e-b267-f36b91a94a31' : null);
-
-      const mapped: Player[] = (round.players as any[])
-        .filter((p) => p.rsvp === 'in')
-        .map((p) => ({
-          id: p.player_id,
-          name: p.profile?.name ?? 'Player',
-          initials: p.profile?.initials ?? '?',
-          bg: p.profile?.avatar_color ?? Colors.creamLight,
-          textColor: p.profile?.avatar_text_color ?? Colors.green,
-        }));
+      const mapped = buildPlayerList(round.players as any[]);
       setPlayers(mapped);
+      setHostId(round.host_id);
 
       const myPlayer = mapped.find((p) => p.id === userId) ?? mapped[0] ?? null;
       setMe(myPlayer);
@@ -368,6 +394,8 @@ export default function ScorecardScreen() {
       const nh = round.total_holes ?? 18;
       const sh = round.starting_hole ?? 1;
       setTotalHoles(nh);
+      setHoleMode(nh === 9 ? '9' : nh === 18 ? '18' : nh === 36 ? '36' : 'custom');
+      if (nh !== 9 && nh !== 18 && nh !== 36) setCustomHoleText(String(nh));
       setStartingHole(sh);
       setActiveHole(sh);
       setCourseName(round.course_name ?? 'Golf Round');
@@ -380,22 +408,7 @@ export default function ScorecardScreen() {
       setRoundMeta([fmtLabel, dateStr].filter(Boolean).join(' · '));
 
       const sortedHoles = holes.sort((a, b) => a.hole_number - b.hole_number);
-      const parsMap: Record<number, number | null> = {};
-      const yardsMap: Record<number, string> = {};
-      for (let h = 1; h <= nh; h++) {
-        const hole = sortedHoles.find((x) => x.hole_number === h);
-        parsMap[h] = hole?.par ?? null;
-        yardsMap[h] = hole?.yardage != null ? `${hole.yardage}` : '';
-      }
-      setHolePars(parsMap);
-      setHoleYardageTexts(yardsMap);
-
-      const initScores: Record<string, Record<number, number | null>> = {};
-      for (const p of mapped) {
-        initScores[p.id] = {};
-        for (let h = 1; h <= nh; h++) initScores[p.id][h] = null;
-      }
-      setScores(initScores);
+      dbHolesRef.current = sortedHoles;
 
       if (round.format === 'match') {
         const [teams, mholes] = await Promise.all([getMatchTeams(id), getMatchHoles(id)]);
@@ -420,12 +433,58 @@ export default function ScorecardScreen() {
     isFirstRender.current = false;
   }, [activeHole]);
 
+  async function reloadPlayers() {
+    if (!id) return;
+    const round = await getRoundWithPlayers(id);
+    if (round) {
+      const mapped = buildPlayerList(round.players as any[]);
+      setPlayers(mapped);
+      const myPlayer = mapped.find((p) => p.id === userId) ?? mapped[0] ?? null;
+      setMe(myPlayer);
+      setOthers(myPlayer ? mapped.filter((p) => p.id !== myPlayer.id) : mapped);
+    }
+  }
+
   function updateScore(playerId: string, hole: number, delta: number) {
-    setScores((prev) => {
-      const current = prev[playerId]?.[hole] ?? null;
-      const next = current === null ? (holePars[hole] ?? 4) : Math.max(1, current + delta);
-      return { ...prev, [playerId]: { ...prev[playerId], [hole]: next } };
-    });
+    const current = scores[playerId]?.[hole] ?? null;
+    const next = current === null ? (holePars[hole] ?? 4) : Math.max(1, current + delta);
+    setScores((prev) => ({ ...prev, [playerId]: { ...prev[playerId], [hole]: next } }));
+    const isTempPlayer = players.find((p) => p.id === playerId)?.isTempPlayer ?? false;
+    if (isTempPlayer) {
+      upsertTempScore(id, playerId, hole, next);
+    } else {
+      upsertScore(id, playerId, hole, next, userId ?? undefined);
+    }
+  }
+
+  async function startGame() {
+    const parsMap: Record<number, number | null> = {};
+    const yardsMap: Record<number, string> = {};
+    for (let h = 1; h <= totalHoles; h++) {
+      const hole = dbHolesRef.current.find((x) => x.hole_number === h);
+      parsMap[h] = hole?.par ?? null;
+      yardsMap[h] = hole?.yardage != null ? `${hole.yardage}` : '';
+    }
+    setHolePars(parsMap);
+    setHoleYardageTexts(yardsMap);
+
+    const initScores: Record<string, Record<number, number | null>> = {};
+    for (const p of players) {
+      initScores[p.id] = {};
+      for (let h = 1; h <= totalHoles; h++) initScores[p.id][h] = null;
+    }
+    if (id) {
+      const [dbScores, dbTempScores] = await Promise.all([getScores(id), getTempScores(id)]);
+      for (const s of dbScores) {
+        if (initScores[s.player_id]) initScores[s.player_id][s.hole_number] = s.strokes;
+      }
+      for (const s of dbTempScores) {
+        if (initScores[s.temp_player_id]) initScores[s.temp_player_id][s.hole_number] = s.strokes;
+      }
+    }
+    setScores(initScores);
+    setActiveHole(startingHole);
+    setPhase('playing');
   }
 
   if (loading) {
@@ -433,6 +492,100 @@ export default function ScorecardScreen() {
       <View style={[s.root, { alignItems: 'center', justifyContent: 'center' }]}>
         <ActivityIndicator color={Colors.cream} />
       </View>
+    );
+  }
+
+  if (phase === 'setup') {
+    return (
+      <>
+      <View style={s.root}>
+        <SafeAreaView edges={['top']} style={{ backgroundColor: Colors.green }}>
+          <View style={s.topBar}>
+            <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')} activeOpacity={0.7} style={s.topBarBackHit}>
+              <Text style={s.backBtn}>← Back</Text>
+            </TouchableOpacity>
+            <Text style={s.topBarTitle}>Stroke Play</Text>
+          </View>
+        </SafeAreaView>
+
+        <ScrollView contentContainerStyle={[s.setupContent, { paddingBottom: insets.bottom + 32 }]}>
+          <Text style={s.setupHeading}>Set up the game</Text>
+
+          <View style={s.setupCard}>
+            <Text style={s.setupCardLabel}>Holes</Text>
+            <View style={s.segRow}>
+              {(['9', '18', '36', 'custom'] as const).map((mode) => (
+                <TouchableOpacity
+                  key={mode}
+                  style={[s.seg, holeMode === mode && s.segActive]}
+                  onPress={() => {
+                    setHoleMode(mode);
+                    if (mode === '9') setTotalHoles(9);
+                    else if (mode === '18') setTotalHoles(18);
+                    else if (mode === '36') setTotalHoles(36);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[s.segText, holeMode === mode && s.segTextActive]}>
+                    {mode === 'custom' ? 'Custom' : mode}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {holeMode === 'custom' && (
+              <TextInput
+                style={s.customInput}
+                value={customHoleText}
+                onChangeText={(t) => {
+                  setCustomHoleText(t);
+                  const n = parseInt(t, 10);
+                  if (!isNaN(n) && n > 0) setTotalHoles(n);
+                }}
+                keyboardType="number-pad"
+                placeholder="# of holes"
+                placeholderTextColor={Colors.muted}
+                maxLength={3}
+                autoFocus
+              />
+            )}
+          </View>
+
+          <View style={s.setupCard}>
+            <View style={s.cardLabelRow}>
+              <Text style={s.setupCardLabel}>Players</Text>
+              <TouchableOpacity onPress={() => setShowEditSheet(true)} activeOpacity={0.7}>
+                <Text style={s.editLink}>Edit</Text>
+              </TouchableOpacity>
+            </View>
+            {players.map((p) => (
+              <View key={p.id} style={s.setupPlayerRow}>
+                <Avatar initials={p.initials} bg={p.bg} textColor={p.textColor} size={28} borderWidth={0} borderColor="transparent" />
+                <Text style={s.setupPlayerName}>{p.name}</Text>
+                {p.isTempPlayer && <Text style={s.guestBadge}>Guest</Text>}
+              </View>
+            ))}
+          </View>
+
+          <View style={s.setupNote}>
+            <Text style={s.setupNoteText}>
+              Stroke play · {totalHoles} holes · {players.length} players
+            </Text>
+          </View>
+
+          <TouchableOpacity style={s.startBtn} onPress={startGame} activeOpacity={0.85}>
+            <Text style={s.startBtnText}>Start</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+      <EditPlayersSheet
+        roundId={id ?? ''}
+        hostId={hostId}
+        visible={showEditSheet}
+        currentUserId={userId}
+        onClose={() => setShowEditSheet(false)}
+        onDone={reloadPlayers}
+      />
+      </>
     );
   }
 
@@ -472,12 +625,12 @@ export default function ScorecardScreen() {
   return (
     <KeyboardAvoidingView
       style={s.root}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <SafeAreaView edges={['top']} style={{ backgroundColor: Colors.green }}>
         <TopBar
           left={
-            <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')} activeOpacity={0.7}>
               <Text style={s.backBtn}>← Back</Text>
             </TouchableOpacity>
           }
@@ -540,7 +693,11 @@ export default function ScorecardScreen() {
           <View style={[s.card, { marginBottom: 12 }]}>
             <ParChipsRow
               confirmedPar={confirmedPar}
-              onSelect={(p) => setHolePars((prev) => ({ ...prev, [activeHole]: p }))}
+              onSelect={(p) => {
+                setHolePars((prev) => ({ ...prev, [activeHole]: p }));
+                const yardage = holeYardageTexts[activeHole] ? parseInt(holeYardageTexts[activeHole], 10) || null : null;
+                if (id) upsertHole(id, activeHole, p, yardage);
+              }}
             />
             <YardageRow
               key={activeHole}
@@ -549,6 +706,13 @@ export default function ScorecardScreen() {
               onChangeText={(t) =>
                 setHoleYardageTexts((prev) => ({ ...prev, [activeHole]: t }))
               }
+              onBlur={() => {
+                const par = holePars[activeHole];
+                if (par !== null && id) {
+                  const yardage = holeYardageTexts[activeHole] ? parseInt(holeYardageTexts[activeHole], 10) || null : null;
+                  upsertHole(id, activeHole, par, yardage);
+                }
+              }}
             />
           </View>
 
@@ -601,7 +765,11 @@ export default function ScorecardScreen() {
                 />
               ))}
               {others.length > 0 && (
-                <TrackOthersToggle open={trackOthers} onToggle={() => setTrackOthers((v) => !v)} />
+                <TrackOthersToggle open={trackOthers} onToggle={() => setTrackOthers((v) => {
+                  const next = !v;
+                  trackOthersStore.set(id ?? '', next);
+                  return next;
+                })} />
               )}
             </View>
           )}
@@ -661,6 +829,43 @@ export default function ScorecardScreen() {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.green },
+
+  // Setup phase
+  topBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 16, paddingVertical: 12, position: 'relative',
+  },
+  topBarTitle: { fontFamily: Fonts.serifMedium, fontSize: 18, color: Colors.cream },
+  topBarBackHit: { position: 'absolute', left: 0, paddingHorizontal: 16, paddingVertical: 12 },
+  setupContent: { backgroundColor: Colors.bg, padding: 16 },
+  setupHeading: { fontFamily: Fonts.serifMedium, fontSize: 24, color: Colors.text, marginBottom: 20, marginTop: 4 },
+  setupCard: {
+    backgroundColor: Colors.card, borderRadius: 14, borderWidth: 0.5,
+    borderColor: Colors.border, padding: 16, gap: 12, marginBottom: 12,
+  },
+  setupCardLabel: { fontFamily: Fonts.sans, fontSize: 13, color: Colors.muted },
+  cardLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  editLink: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.green },
+  segRow: { flexDirection: 'row', gap: 8 },
+  seg: { flex: 1, paddingVertical: 8, borderRadius: 10, backgroundColor: Colors.creamLight, alignItems: 'center' },
+  segActive: { backgroundColor: Colors.green },
+  segText: { fontFamily: Fonts.sansMedium, fontSize: 14, color: Colors.text },
+  segTextActive: { color: Colors.cream },
+  customInput: {
+    fontFamily: Fonts.sansSemiBold, fontSize: 20, color: Colors.text,
+    backgroundColor: Colors.creamLight, borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 10, textAlign: 'center',
+  },
+  setupPlayerRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  setupPlayerName: { fontFamily: Fonts.sans, fontSize: 14, color: Colors.text, flex: 1 },
+  guestBadge: { fontFamily: Fonts.sans, fontSize: 11, color: Colors.muted },
+  setupNote: { paddingVertical: 10, alignItems: 'center' },
+  setupNoteText: { fontFamily: Fonts.sans, fontSize: 13, color: Colors.muted },
+  startBtn: {
+    backgroundColor: Colors.green, borderRadius: 14,
+    paddingVertical: 16, alignItems: 'center', marginTop: 4,
+  },
+  startBtnText: { fontFamily: Fonts.sansSemiBold, fontSize: 16, color: Colors.cream },
 
   backBtn: { fontFamily: Fonts.sans, fontSize: 13, color: 'rgba(216,214,175,0.6)' },
   liveBadge: { fontFamily: Fonts.sans, fontSize: 12, color: '#5aaa5a' },
@@ -725,7 +930,7 @@ const s = StyleSheet.create({
   parChipSelected: { backgroundColor: Colors.green, borderColor: Colors.green },
   parChipText: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.muted },
   parChipTextSelected: { color: Colors.cream },
-  infoInput: { fontFamily: Fonts.sansMedium, fontSize: 13, minWidth: 60, textAlign: 'right', padding: 0 },
+  infoInput: { fontFamily: Fonts.sansMedium, fontSize: 13, minWidth: 100, textAlign: 'right', padding: 0 },
   infoInputConfirmed: { color: Colors.text },
   infoInputPlaceholder: { color: Colors.muted },
 

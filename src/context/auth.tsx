@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { type Session } from '@supabase/supabase-js';
 
 import { supabase } from '@/lib/supabase';
-import { getProfile, upsertProfile } from '@/lib/db';
+import { getProfile, upsertProfile, claimTempPlayersByPhone } from '@/lib/db';
 import { type Profile } from '@/lib/database.types';
 
 interface AuthContextValue {
@@ -71,7 +71,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Ensure profile row exists (trigger may race on first login)
     if (data.user) {
       await upsertProfile({ id: data.user.id, phone });
-      await loadProfile(data.user.id);
+      await Promise.all([
+        loadProfile(data.user.id),
+        claimTempPlayersByPhone(phone, data.user.id),
+      ]);
     }
 
     return { error: null };

@@ -12,11 +12,13 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Fonts, Spacing } from '@/constants/theme';
-import { getRoundWithPlayers } from '@/lib/db';
+import { useAuth } from '@/context/auth';
+import { getRoundWithPlayers, getScores, getTempScores, getSkinsResults, upsertScore, upsertTempScore, upsertSkinsResult } from '@/lib/db';
+import { EditPlayersSheet } from '@/components/EditPlayersSheet';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Player = { id: string; name: string; initials: string; color: string };
+type Player = { id: string; name: string; initials: string; color: string; isTempPlayer: boolean };
 
 type HoleEntry = {
   scores: Record<string, number | null>;
@@ -152,19 +154,41 @@ function Pip({ player }: { player: Player }) {
 // ─── Setup phase ──────────────────────────────────────────────────────────────
 
 function SetupPhase({
-  players, dollarPerSkin, setDollarPerSkin, totalHoles, setTotalHoles, onStart, onBack,
+  players, dollarPerSkin, setDollarPerSkin, totalHoles, setTotalHoles, onStart, onBack, onEditPlayers,
 }: {
   players: Player[];
   dollarPerSkin: number; setDollarPerSkin: (v: number) => void;
   totalHoles: number; setTotalHoles: (v: number) => void;
   onStart: () => void;
   onBack: () => void;
+  onEditPlayers: () => void;
 }) {
   const insets = useSafeAreaInsets();
+
   const initMode: '9' | '18' | '36' | 'custom' =
     totalHoles === 9 ? '9' : totalHoles === 18 ? '18' : totalHoles === 36 ? '36' : 'custom';
   const [holeMode, setHoleMode] = useState<'9' | '18' | '36' | 'custom'>(initMode);
   const [customText, setCustomText] = useState(initMode === 'custom' ? String(totalHoles) : '');
+
+  const PRESET_AMOUNTS = [1, 5, 10, 20] as const;
+  type AmountMode = 1 | 5 | 10 | 20 | 'custom';
+  const initAmountMode: AmountMode = (PRESET_AMOUNTS as readonly number[]).includes(dollarPerSkin)
+    ? (dollarPerSkin as 1 | 5 | 10 | 20) : 'custom';
+  const [amountMode, setAmountMode] = useState<AmountMode>(initAmountMode);
+  const [customAmountText, setCustomAmountText] = useState(
+    initAmountMode === 'custom' ? String(dollarPerSkin) : '',
+  );
+
+  function selectAmountMode(mode: AmountMode) {
+    setAmountMode(mode);
+    if (mode !== 'custom') setDollarPerSkin(mode);
+  }
+
+  function handleCustomAmountChange(text: string) {
+    setCustomAmountText(text);
+    const n = parseFloat(text);
+    if (!isNaN(n) && n > 0) setDollarPerSkin(n);
+  }
 
   function selectMode(mode: '9' | '18' | '36' | 'custom') {
     setHoleMode(mode);
@@ -186,7 +210,7 @@ function SetupPhase({
           <TouchableOpacity onPress={onBack} activeOpacity={0.7} style={g.topBarBackHit}>
             <Text style={g.topBarBack}>← Back</Text>
           </TouchableOpacity>
-          <Text style={g.topBarTitle}>Skins Game</Text>
+          <Text style={g.topBarTitle}>Skins</Text>
         </View>
       </SafeAreaView>
 
@@ -195,15 +219,30 @@ function SetupPhase({
 
         <View style={g.fieldCard}>
           <Text style={g.fieldLabel}>Dollar per skin</Text>
-          <View style={g.stepper}>
-            <TouchableOpacity style={g.stepBtn} onPress={() => setDollarPerSkin(Math.max(1, dollarPerSkin - 1))} activeOpacity={0.7}>
-              <Text style={g.stepBtnText}>−</Text>
-            </TouchableOpacity>
-            <Text style={g.stepValue}>{fmt(dollarPerSkin)}</Text>
-            <TouchableOpacity style={g.stepBtn} onPress={() => setDollarPerSkin(dollarPerSkin + 1)} activeOpacity={0.7}>
-              <Text style={g.stepBtnText}>+</Text>
+          <View style={g.segRow}>
+            {([1, 5, 10, 20] as const).map((amt) => (
+              <TouchableOpacity key={amt} style={[g.seg, amountMode === amt && g.segActive]} onPress={() => selectAmountMode(amt)} activeOpacity={0.8}>
+                <Text style={[g.segText, amountMode === amt && g.segTextActive]}>${amt}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={[g.seg, amountMode === 'custom' && g.segActive]} onPress={() => selectAmountMode('custom')} activeOpacity={0.8}>
+              <Text style={[g.segText, amountMode === 'custom' && g.segTextActive]}>
+                {amountMode === 'custom' && dollarPerSkin > 0 ? fmt(dollarPerSkin) : 'Custom'}
+              </Text>
             </TouchableOpacity>
           </View>
+          {amountMode === 'custom' && (
+            <TextInput
+              style={g.customHolesInput}
+              value={customAmountText}
+              onChangeText={handleCustomAmountChange}
+              keyboardType="decimal-pad"
+              placeholder="e.g., 7.50"
+              placeholderTextColor={Colors.muted}
+              maxLength={8}
+              autoFocus
+            />
+          )}
         </View>
 
         <View style={g.fieldCard}>
@@ -230,12 +269,18 @@ function SetupPhase({
         </View>
 
         <View style={g.fieldCard}>
-          <Text style={g.fieldLabel}>Players</Text>
+          <View style={g.cardLabelRow}>
+            <Text style={g.fieldLabel}>Players</Text>
+            <TouchableOpacity onPress={onEditPlayers} activeOpacity={0.7}>
+              <Text style={g.editLink}>Edit</Text>
+            </TouchableOpacity>
+          </View>
           <View style={g.playerList}>
             {players.map((p) => (
               <View key={p.id} style={g.playerRow}>
                 <Pip player={p} />
                 <Text style={g.playerName}>{p.name}</Text>
+                {p.isTempPlayer && <Text style={g.guestBadge}>Guest</Text>}
               </View>
             ))}
           </View>
@@ -248,7 +293,7 @@ function SetupPhase({
         </View>
 
         <TouchableOpacity style={g.primaryBtn} onPress={onStart} activeOpacity={0.85}>
-          <Text style={g.primaryBtnText}>Start Skins Game</Text>
+          <Text style={g.primaryBtnText}>Start</Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -258,16 +303,19 @@ function SetupPhase({
 // ─── Hole card ────────────────────────────────────────────────────────────────
 
 function HoleCard({
-  hole, players, dollarPerSkin, onScoreChange, onResolve,
+  hole, players, myId, trackOthers, dollarPerSkin, onScoreChange, onResolve, onToggleTrackOthers,
 }: {
-  hole: HoleEntry; players: Player[]; dollarPerSkin: number;
+  hole: HoleEntry; players: Player[]; myId: string | null; trackOthers: boolean;
+  dollarPerSkin: number;
   onScoreChange: (pid: string, score: number | null) => void;
   onResolve: (winnerId?: string) => void;
+  onToggleTrackOthers: () => void;
 }) {
   const potValue = (hole.carryoverBefore + 1) * dollarPerSkin;
   const auto = autoWinner(hole.scores, players);
   const allEntered = players.every((p) => hole.scores[p.id] != null);
   const potFontSize = Math.min(16 + hole.carryoverBefore * 6, 42);
+  const hasOthers = players.some((p) => p.id !== myId);
 
   return (
     <View style={g.holeCard}>
@@ -286,24 +334,37 @@ function HoleCard({
 
       {players.map((p) => {
         const score = hole.scores[p.id];
+        const canEdit = myId === null || p.id === myId || trackOthers;
         return (
           <View key={p.id} style={g.scoreRow}>
             <Pip player={p} />
             <Text style={g.scorePlayerName}>{p.name}</Text>
-            <View style={g.stepper}>
-              <TouchableOpacity style={g.stepBtn} activeOpacity={0.7}
-                onPress={() => { if (score == null) return; onScoreChange(p.id, score <= 1 ? null : score - 1); }}>
-                <Text style={g.stepBtnText}>−</Text>
-              </TouchableOpacity>
+            {canEdit ? (
+              <View style={g.stepper}>
+                <TouchableOpacity style={g.stepBtn} activeOpacity={0.7}
+                  onPress={() => { if (score == null) return; onScoreChange(p.id, score <= 1 ? null : score - 1); }}>
+                  <Text style={g.stepBtnText}>−</Text>
+                </TouchableOpacity>
+                <Text style={[g.stepValue, score == null && g.stepValueDim]}>{score ?? '—'}</Text>
+                <TouchableOpacity style={g.stepBtn} activeOpacity={0.7}
+                  onPress={() => onScoreChange(p.id, (score ?? 0) + 1)}>
+                  <Text style={g.stepBtnText}>+</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
               <Text style={[g.stepValue, score == null && g.stepValueDim]}>{score ?? '—'}</Text>
-              <TouchableOpacity style={g.stepBtn} activeOpacity={0.7}
-                onPress={() => onScoreChange(p.id, (score ?? 0) + 1)}>
-                <Text style={g.stepBtnText}>+</Text>
-              </TouchableOpacity>
-            </View>
+            )}
           </View>
         );
       })}
+
+      {hasOthers && (
+        <TouchableOpacity onPress={onToggleTrackOthers} activeOpacity={0.7} style={g.trackToggle}>
+          <Text style={g.trackToggleText}>
+            {trackOthers ? 'Done tracking others ▾' : 'Track for others ▴'}
+          </Text>
+        </TouchableOpacity>
+      )}
 
       {allEntered && auto !== null && (
         <View style={g.resolveBox}>
@@ -387,10 +448,13 @@ function ResolvedHoleView({
 // ─── Playing phase ────────────────────────────────────────────────────────────
 
 function PlayingPhase({
-  holes, players, currentHole, viewingHole, dollarPerSkin, totalHoles,
+  holes, players, myId, trackOthers, onToggleTrackOthers,
+  currentHole, viewingHole, dollarPerSkin, totalHoles,
   skinCounts, onScoreChange, onResolve, onNavigate, onEndRound,
 }: {
-  holes: HoleEntry[]; players: Player[]; currentHole: number; viewingHole: number;
+  holes: HoleEntry[]; players: Player[]; myId: string | null;
+  trackOthers: boolean; onToggleTrackOthers: () => void;
+  currentHole: number; viewingHole: number;
   dollarPerSkin: number; totalHoles: number;
   skinCounts: Record<string, number>;
   onScoreChange: (holeIdx: number, pid: string, score: number | null) => void;
@@ -429,7 +493,7 @@ function PlayingPhase({
       <SafeAreaView edges={['top']} style={{ backgroundColor: Colors.green }}>
         <View style={g.topBar}>
           <Text style={g.topBarSub}>Hole {viewingHole + 1} of {totalHoles}</Text>
-          <Text style={g.topBarTitle}>Skins Game</Text>
+          <Text style={g.topBarTitle}>Skins</Text>
           <TouchableOpacity onPress={onEndRound} activeOpacity={0.7} style={g.topBarEndHit}>
             <Text style={g.topBarEnd}>End</Text>
           </TouchableOpacity>
@@ -474,6 +538,9 @@ function PlayingPhase({
             <HoleCard
               hole={viewedHole}
               players={players}
+              myId={myId}
+              trackOthers={trackOthers}
+              onToggleTrackOthers={onToggleTrackOthers}
               dollarPerSkin={dollarPerSkin}
               onScoreChange={(pid, score) => onScoreChange(viewingHole, pid, score)}
               onResolve={(winnerId) => onResolve(viewingHole, winnerId)}
@@ -516,8 +583,14 @@ function PlayingPhase({
           style={[g.navBtn, isViewingCurrent && currentHole === totalHoles - 1 && g.navBtnFinish]}
           activeOpacity={0.7}
           onPress={() => {
-            if (viewingHole < totalHoles - 1) onNavigate(viewingHole + 1);
-            else onEndRound();
+            if (isViewingCurrent && !holes[viewingHole]?.resolved) {
+              // Auto-carryover: no scores entered or not yet resolved — move on
+              onResolve(viewingHole, undefined);
+            } else if (viewingHole < totalHoles - 1) {
+              onNavigate(viewingHole + 1);
+            } else {
+              onEndRound();
+            }
           }}
         >
           <Text style={[g.navBtnText, isViewingCurrent && currentHole === totalHoles - 1 && g.navBtnTextFinish]}>
@@ -604,35 +677,67 @@ function SettlementPhase({
 export default function SkinsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { session } = useAuth();
+  const userId = session?.user.id ?? (__DEV__ ? '46bae3d3-2c18-450e-b267-f36b91a94a31' : null);
 
   const [players, setPlayers] = useState<Player[]>([]);
+  const [myId, setMyId] = useState<string | null>(null);
+  const [trackOthers, setTrackOthers] = useState(false);
   const [loading, setLoading] = useState(true);
   const [phase, setPhase] = useState<'setup' | 'playing' | 'settled'>('setup');
-  const [dollarPerSkin, setDollarPerSkin] = useState(1);
+  const [dollarPerSkin, setDollarPerSkin] = useState(5);
   const [totalHoles, setTotalHoles] = useState<number>(18);
   const [holes, setHoles] = useState<HoleEntry[]>([]);
   const [currentHole, setCurrentHole] = useState(0);
   const [viewingHole, setViewingHole] = useState(0);
+  const [hostId, setHostId] = useState<string>('');
+  const [showEditSheet, setShowEditSheet] = useState(false);
+
+  function buildPlayerList(rawPlayers: any[]): Player[] {
+    return rawPlayers
+      .filter((p) => p.rsvp === 'in' || p.temp_player_id != null)
+      .map((p) => {
+        if (p.temp_player_id) {
+          const tp = p.temp_player;
+          const name = tp?.name ?? 'Guest';
+          const initials = name.split(/\s+/).map((w: string) => w[0]?.toUpperCase() ?? '').slice(0, 2).join('') || '?';
+          return { id: tp?.id ?? p.temp_player_id, name, initials, color: '#7a7060', isTempPlayer: true };
+        }
+        return {
+          id: p.player_id,
+          name: p.profile?.name ?? 'Player',
+          initials: p.profile?.initials ?? '?',
+          color: p.profile?.avatar_color ?? Colors.green,
+          isTempPlayer: false,
+        };
+      });
+  }
 
   useEffect(() => {
     if (!id) { setLoading(false); return; }
     getRoundWithPlayers(id).then((round) => {
       if (round) {
-        const mapped: Player[] = (round.players as any[])
-          .filter((p) => p.rsvp === 'in')
-          .map((p) => ({
-            id: p.player_id,
-            name: p.profile?.name ?? 'Player',
-            initials: p.profile?.initials ?? '?',
-            color: p.profile?.avatar_color ?? Colors.green,
-          }));
+        const mapped = buildPlayerList(round.players as any[]);
         setPlayers(mapped);
+        const myPlayer = mapped.find((p) => p.id === userId) ?? mapped[0] ?? null;
+        setMyId(myPlayer?.id ?? null);
+        setHostId(round.host_id);
         if (round.skins_bet_cents > 0) setDollarPerSkin(round.skins_bet_cents / 100);
-        setTotalHoles(round.total_holes ?? 18);
       }
       setLoading(false);
     });
   }, [id]);
+
+  async function reloadPlayers() {
+    if (!id) return;
+    const round = await getRoundWithPlayers(id);
+    if (round) {
+      const mapped = buildPlayerList(round.players as any[]);
+      setPlayers(mapped);
+      const myPlayer = mapped.find((p) => p.id === userId) ?? mapped[0] ?? null;
+      setMyId(myPlayer?.id ?? null);
+    }
+  }
 
   const skinCounts = useMemo(() => {
     const c: Record<string, number> = Object.fromEntries(players.map((p) => [p.id, 0]));
@@ -653,11 +758,42 @@ export default function SkinsScreen() {
 
   const transactions = useMemo(() => minimumTransactions(nets, players), [nets, players]);
 
-  function startGame() {
-    const h = Array.from({ length: totalHoles }, () => blankHole(0, players));
+  async function startGame() {
+    const [dbScores, dbTempScores, dbSkins] = await Promise.all([
+      id ? getScores(id) : Promise.resolve([]),
+      id ? getTempScores(id) : Promise.resolve([]),
+      id ? getSkinsResults(id) : Promise.resolve([]),
+    ]);
+
+    // Reconstruct hole state from persisted data
+    let carryover = 0;
+    const h = Array.from({ length: totalHoles }, (_, i) => {
+      const holeNum = i + 1;
+      const entry = blankHole(carryover, players);
+
+      for (const p of players) {
+        const s = p.isTempPlayer
+          ? dbTempScores.find((ts) => ts.temp_player_id === p.id && ts.hole_number === holeNum)
+          : dbScores.find((ds) => ds.player_id === p.id && ds.hole_number === holeNum);
+        if (s) entry.scores[p.id] = s.strokes;
+      }
+
+      const skinResult = dbSkins.find((r) => r.hole_number === holeNum);
+      if (skinResult) {
+        entry.resolved = true;
+        entry.winnerId = skinResult.winner_id;
+        entry.skinsWon = skinResult.winner_id ? Math.round(skinResult.pot_value / dollarPerSkin) : 0;
+        carryover = skinResult.winner_id ? 0 : carryover + 1;
+      }
+
+      return entry;
+    });
+
+    const firstUnresolved = h.findIndex((hole) => !hole.resolved);
+    const startIdx = firstUnresolved === -1 ? totalHoles - 1 : firstUnresolved;
     setHoles(h);
-    setCurrentHole(0);
-    setViewingHole(0);
+    setCurrentHole(startIdx);
+    setViewingHole(startIdx);
     setPhase('playing');
   }
 
@@ -667,6 +803,12 @@ export default function SkinsScreen() {
       next[holeIdx] = { ...next[holeIdx], scores: { ...next[holeIdx].scores, [pid]: score } };
       return next;
     });
+    const isTempPlayer = players.find((p) => p.id === pid)?.isTempPlayer ?? false;
+    if (isTempPlayer) {
+      upsertTempScore(id, pid, holeIdx + 1, score);
+    } else {
+      upsertScore(id, pid, holeIdx + 1, score, userId ?? undefined);
+    }
   }
 
   function handleResolve(holeIdx: number, winnerId?: string) {
@@ -680,6 +822,14 @@ export default function SkinsScreen() {
       next[holeIdx] = hole;
       if (holeIdx + 1 < next.length) {
         next[holeIdx + 1] = { ...next[holeIdx + 1], carryoverBefore: winnerId ? 0 : hole.carryoverBefore + 1 };
+      }
+      if (id) {
+        upsertSkinsResult({
+          round_id: id,
+          hole_number: holeIdx + 1,
+          winner_id: winnerId ?? null,
+          pot_value: skinsThisHole * dollarPerSkin,
+        });
       }
       return next;
     });
@@ -702,13 +852,24 @@ export default function SkinsScreen() {
 
   if (phase === 'setup') {
     return (
-      <SetupPhase
-        players={players}
-        dollarPerSkin={dollarPerSkin} setDollarPerSkin={setDollarPerSkin}
-        totalHoles={totalHoles} setTotalHoles={setTotalHoles}
-        onStart={startGame}
-        onBack={() => router.back()}
-      />
+      <>
+        <SetupPhase
+          players={players}
+          dollarPerSkin={dollarPerSkin} setDollarPerSkin={setDollarPerSkin}
+          totalHoles={totalHoles} setTotalHoles={setTotalHoles}
+          onStart={startGame}
+          onBack={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}
+          onEditPlayers={() => setShowEditSheet(true)}
+        />
+        <EditPlayersSheet
+          roundId={id ?? ''}
+          hostId={hostId}
+          visible={showEditSheet}
+          currentUserId={userId}
+          onClose={() => setShowEditSheet(false)}
+          onDone={reloadPlayers}
+        />
+      </>
     );
   }
 
@@ -717,6 +878,9 @@ export default function SkinsScreen() {
       <PlayingPhase
         holes={holes}
         players={players}
+        myId={myId}
+        trackOthers={trackOthers}
+        onToggleTrackOthers={() => setTrackOthers((v) => !v)}
         currentHole={currentHole}
         viewingHole={viewingHole}
         dollarPerSkin={dollarPerSkin}
@@ -736,7 +900,7 @@ export default function SkinsScreen() {
       dollarPerSkin={dollarPerSkin} skinCounts={skinCounts}
       nets={nets} transactions={transactions}
       totalSkinsAwarded={totalSkinsAwarded}
-      onDone={() => router.back()}
+      onDone={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}
     />
   );
 }
@@ -811,9 +975,12 @@ const g = StyleSheet.create({
   },
 
   // Players setup
+  cardLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  editLink: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.green },
   playerList: { gap: 10 },
   playerRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  playerName: { fontFamily: Fonts.sans, fontSize: 14, color: Colors.text },
+  playerName: { fontFamily: Fonts.sans, fontSize: 14, color: Colors.text, flex: 1 },
+  guestBadge: { fontFamily: Fonts.sans, fontSize: 11, color: Colors.muted },
 
   // Pip
   pip: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
@@ -842,6 +1009,9 @@ const g = StyleSheet.create({
     paddingVertical: 12, borderTopWidth: 0.5, borderTopColor: Colors.border, gap: 10,
   },
   scorePlayerName: { flex: 1, fontFamily: Fonts.sans, fontSize: 14, color: Colors.text },
+
+  trackToggle: { paddingVertical: 11, alignItems: 'center', borderTopWidth: 0.5, borderTopColor: Colors.border },
+  trackToggleText: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted },
 
   resolveBox: { borderTopWidth: 0.5, borderTopColor: Colors.border, padding: 14, gap: 8, backgroundColor: '#f8f6ef' },
   resolveLabel: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.text },
@@ -912,6 +1082,6 @@ const g = StyleSheet.create({
   noTxnText: { fontFamily: Fonts.sans, fontSize: 14, color: Colors.muted, textAlign: 'center', paddingVertical: 4 },
 
   // Shared
-  primaryBtn: { backgroundColor: Colors.green, borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginTop: 8 },
-  primaryBtnText: { fontFamily: Fonts.sansSemiBold, fontSize: 15, color: Colors.cream },
+  primaryBtn: { backgroundColor: Colors.green, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 8 },
+  primaryBtnText: { fontFamily: Fonts.sansSemiBold, fontSize: 16, color: Colors.cream },
 });

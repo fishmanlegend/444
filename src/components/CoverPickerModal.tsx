@@ -62,7 +62,7 @@ function toCategoryScores(history: { imageId: string; count: number }[]): Record
 
 // ─── GIF thumbnail ────────────────────────────────────────────────────────────
 
-function GifThumb({ source, selected, onPress }: { source: number; selected: boolean; onPress: () => void }) {
+function GifThumb({ source, selected, onPress }: { source: string; selected: boolean; onPress: () => void }) {
   const player = useVideoPlayer(source, (pl) => { pl.loop = true; pl.muted = true; pl.play(); });
   return (
     <TouchableOpacity style={[p.gridItem, selected && p.gridItemSelected]} onPress={onPress} activeOpacity={0.8}>
@@ -86,9 +86,9 @@ export function CoverPickerModal({
   onClose,
 }: {
   visible: boolean;
-  current: number;
+  current: string;
   userId?: string;
-  onSelect: (source: number, isVideo: boolean) => void;
+  onSelect: (source: string, isVideo: boolean) => void;
   onClose: () => void;
 }) {
   const insets = useSafeAreaInsets();

@@ -3,8 +3,9 @@ import { decode } from 'base64-arraybuffer';
 
 import { supabase } from './supabase';
 import type {
-  Profile, Round, Hole, RoundPlayer, Score, SkinsResult, Pal, GuestRsvp,
+  Profile, Round, Hole, RoundPlayer, Score, TempScore, SkinsResult, Pal, GuestRsvp,
   MatchTeam, MatchHole, RoundFormat, RsvpStatus, Club, ClubMember, ClubPost,
+  ClubInvite, TempPlayer,
 } from './database.types';
 
 // ─── Profiles ─────────────────────────────────────────────────────────────────
@@ -192,7 +193,7 @@ export async function createRound(params: {
     .from('rounds')
     .insert({
       host_id: params.hostId,
-      club_id: params.clubId ?? null,
+      ...(params.clubId ? { club_id: params.clubId } : {}),
       title: params.title,
       course_name: params.courseName,
       format: params.format,
@@ -212,7 +213,10 @@ export async function createRound(params: {
     .select()
     .single();
 
-  if (error || !round) return null;
+  if (error || !round) {
+    if (__DEV__) console.error('[createRound] insert failed:', JSON.stringify(error));
+    return null;
+  }
 
   // Insert holes
   const holes: Hole[] = params.pars.map((par, i) => ({
@@ -248,11 +252,11 @@ export async function getRoundWithPlayers(id: string): Promise<(Round & { player
 
   const { data: players } = await supabase
     .from('round_players')
-    .select('*, profile:profiles(*)')
+    .select('*, profile:profiles!round_players_player_id_fkey(*), temp_player:temp_players!round_players_temp_player_id_fkey(*)')
     .eq('round_id', id)
     .order('joined_at');
 
-  return { ...round, players: players ?? [] };
+  return { ...round, players: (players ?? []) as RoundPlayer[] };
 }
 
 export async function getHoles(roundId: string): Promise<Hole[]> {
@@ -367,6 +371,65 @@ export async function updateRsvp(roundId: string, playerId: string, rsvp: RsvpSt
     .eq('player_id', playerId);
 }
 
+// ─── Temp players ─────────────────────────────────────────────────────────────
+
+export async function createTempPlayer(
+  roundId: string,
+  name: string,
+  phone: string | null,
+  createdBy: string,
+): Promise<TempPlayer | null> {
+  const { data } = await supabase
+    .from('temp_players')
+    .insert({ round_id: roundId, name: name.trim(), phone: phone || null, created_by: createdBy })
+    .select()
+    .single();
+  return (data as TempPlayer) ?? null;
+}
+
+export async function claimTempPlayersByPhone(phone: string, realPlayerId: string): Promise<void> {
+  const cleaned = phone.replace(/\D/g, '').replace(/^1/, '');
+  const { data: temps } = await supabase
+    .from('temp_players')
+    .select('id')
+    .or(`phone.eq.${cleaned},phone.eq.+1${cleaned},phone.eq.1${cleaned}`);
+  if (!temps?.length) return;
+  await Promise.all(
+    (temps as { id: string }[]).map((tp) =>
+      (supabase.rpc as any)('claim_temp_player', {
+        p_temp_player_id: tp.id,
+        p_real_player_id: realPlayerId,
+      })
+    )
+  );
+}
+
+export async function addTempPlayerToRound(roundId: string, tempPlayerId: string): Promise<void> {
+  await supabase.from('round_players').insert({
+    round_id: roundId,
+    temp_player_id: tempPlayerId,
+    rsvp: 'in' as RsvpStatus,
+    is_host: false,
+  } as any);
+}
+
+export async function removePlayerFromRound(roundId: string, playerId: string): Promise<void> {
+  await supabase.from('round_players').delete().eq('round_id', roundId).eq('player_id', playerId);
+}
+
+export async function removeTempPlayerFromRound(roundId: string, tempPlayerId: string): Promise<void> {
+  await supabase.from('round_players').delete().eq('round_id', roundId).eq('temp_player_id', tempPlayerId);
+  await supabase.from('temp_players').delete().eq('id', tempPlayerId);
+}
+
+export async function lookupProfileByPhone(phone: string): Promise<Profile | null> {
+  const cleaned = phone.replace(/\D/g, '');
+  const { data } = await supabase.from('profiles').select('*').eq('phone', cleaned).maybeSingle();
+  if (data) return data as Profile;
+  const { data: data2 } = await supabase.from('profiles').select('*').eq('phone', `+1${cleaned}`).maybeSingle();
+  return (data2 as Profile) ?? null;
+}
+
 // ─── Scores ───────────────────────────────────────────────────────────────────
 
 export async function upsertScore(
@@ -374,6 +437,7 @@ export async function upsertScore(
   playerId: string,
   holeNumber: number,
   strokes: number | null,
+  recordedBy?: string,
 ) {
   return supabase.from('scores').upsert({
     round_id: roundId,
@@ -381,7 +445,28 @@ export async function upsertScore(
     hole_number: holeNumber,
     strokes,
     recorded_at: new Date().toISOString(),
+    ...(recordedBy ? { recorded_by: recordedBy } : {}),
   });
+}
+
+export async function upsertTempScore(
+  roundId: string,
+  tempPlayerId: string,
+  holeNumber: number,
+  strokes: number | null,
+): Promise<void> {
+  if (strokes === null) {
+    await supabase.from('temp_scores').delete()
+      .eq('round_id', roundId).eq('temp_player_id', tempPlayerId).eq('hole_number', holeNumber);
+  } else {
+    await supabase.from('temp_scores').upsert({
+      round_id: roundId,
+      temp_player_id: tempPlayerId,
+      hole_number: holeNumber,
+      strokes,
+      recorded_at: new Date().toISOString(),
+    });
+  }
 }
 
 export async function getScores(roundId: string): Promise<Score[]> {
@@ -390,6 +475,18 @@ export async function getScores(roundId: string): Promise<Score[]> {
     .select('*')
     .eq('round_id', roundId);
   return data ?? [];
+}
+
+export async function getTempScores(roundId: string): Promise<TempScore[]> {
+  const { data } = await supabase
+    .from('temp_scores')
+    .select('*')
+    .eq('round_id', roundId);
+  return (data ?? []) as TempScore[];
+}
+
+export async function upsertHole(roundId: string, holeNumber: number, par: number, yardage: number | null): Promise<void> {
+  await supabase.from('holes').upsert({ round_id: roundId, hole_number: holeNumber, par, yardage });
 }
 
 // Organizes scores into scores[playerIndex][holeIndex] for scorecard screens
@@ -516,6 +613,7 @@ export async function finalizeRound(
   scheduledAt: string | null,
   skinsWinnerIds?: string[],    // one per hole, null = carryover
   skinsPotValue?: number,
+  winnerId?: string | null,
 ) {
   await updateRoundStatus(roundId, 'completed');
 
@@ -583,6 +681,43 @@ export async function finalizeRound(
   // Large round host (8+ players)
   if (playerIds.length >= 8) {
     await incrementStat(hostId, 'large_rounds_hosted');
+  }
+
+  // ─── Memory machine + game mechanics ────────────────────────────────────────
+
+  const { data: roundMeta } = await supabase
+    .from('rounds')
+    .select('club_id, cover_image_id')
+    .eq('id', roundId)
+    .single();
+
+  const { data: recap } = await supabase
+    .from('recaps')
+    .insert({
+      round_id: roundId,
+      created_by: hostId,
+      cover_image_id: roundMeta?.cover_image_id ?? null,
+      winner_id: winnerId ?? null,
+      visibility: roundMeta?.club_id ? 'club' : 'public',
+    })
+    .select('id')
+    .single();
+
+  if (recap?.id) {
+    await (supabase.rpc as any)('generate_superlatives', {
+      p_recap_id: recap.id,
+      p_round_id: roundId,
+    });
+    for (const pid of playerIds) {
+      await (supabase.rpc as any)('generate_profile_labels', { p_user_id: pid });
+    }
+  }
+
+  await (supabase.rpc as any)('update_rivalries', { p_round_id: roundId });
+
+  if (roundMeta?.club_id) {
+    await (supabase.rpc as any)('update_club_belts', { p_round_id: roundId });
+    await (supabase.rpc as any)('award_season_points', { p_round_id: roundId });
   }
 }
 
@@ -675,19 +810,33 @@ export async function getClubWithMembers(clubId: string): Promise<Club | null> {
   return { ...(club as Club), members: (members ?? []) as ClubMember[] };
 }
 
-export async function createClub(userId: string, name: string): Promise<Club | null> {
-  const { data: club } = await supabase
-    .from('clubs')
-    .insert({ name, created_by: userId } as any)
+export async function createClub(
+  _userId: string,
+  name: string,
+  invitePolicy: 'owner_only' | 'officers' | 'any_member' = 'any_member',
+): Promise<Club | null> {
+  const { data, error } = await supabase.rpc('create_club', {
+    p_name: name,
+    p_invite_policy: invitePolicy,
+  });
+  if (error || !data) return null;
+  return getClubWithMembers(data as string);
+}
+
+export async function redeemClubInvite(code: string): Promise<{ clubId: string } | { error: string }> {
+  const { data, error } = await supabase.rpc('redeem_club_invite', { p_code: code });
+  if (error) return { error: error.message };
+  return { clubId: data as string };
+}
+
+export async function createClubInvite(clubId: string, createdBy: string): Promise<ClubInvite | null> {
+  const { data, error } = await supabase
+    .from('club_invites')
+    .insert({ club_id: clubId, created_by: createdBy } as any)
     .select()
     .single();
-  if (!club) return null;
-
-  await supabase
-    .from('club_members')
-    .insert({ club_id: (club as Club).id, user_id: userId, added_by: userId, status: 'member' as const });
-
-  return club as Club;
+  if (error) return null;
+  return data as ClubInvite;
 }
 
 export async function addClubMember(clubId: string, userId: string, addedBy: string): Promise<void> {
@@ -716,6 +865,16 @@ export async function getClubPosts(clubId: string): Promise<ClubPost[]> {
     .eq('club_id', clubId)
     .order('created_at', { ascending: false })
     .limit(50);
+  return (data ?? []) as ClubPost[];
+}
+
+export async function getClubMessages(clubId: string, limit = 100): Promise<ClubPost[]> {
+  const { data } = await supabase
+    .from('club_posts')
+    .select('*, profile:profiles(*)')
+    .eq('club_id', clubId)
+    .order('created_at', { ascending: true })
+    .limit(limit);
   return (data ?? []) as ClubPost[];
 }
 

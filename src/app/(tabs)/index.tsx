@@ -36,7 +36,7 @@ const CARD_PADDING = 16;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getCoverSource(round: Round): number | null {
+function getCoverSource(round: Round): string | null {
   if (!round.cover_image_id) return null;
   if (round.cover_is_video) return PRESET_GIFS.find((g) => g.id === round.cover_image_id)?.source ?? null;
   return PRESET_IMAGES.find((i) => i.id === round.cover_image_id)?.source ?? null;
@@ -51,7 +51,7 @@ function fmtCardDate(iso: string): string {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function VideoThumb({ source, style }: { source: number; style: object }) {
+function VideoThumb({ source, style }: { source: string; style: object }) {
   const player = useVideoPlayer(source, (p) => { p.loop = true; p.muted = true; p.play(); });
   return <VideoView player={player} style={style} contentFit="cover" contentPosition="center" nativeControls={false} />;
 }
@@ -81,25 +81,27 @@ function EventCard({ round, cardSize, onPress }: {
 }) {
   const source = getCoverSource(round);
   return (
-    <TouchableOpacity style={[s.card, { width: cardSize }]} activeOpacity={0.88} onPress={onPress}>
-      {/* Square image with badge overlay */}
-      <View style={[s.cardImage, { width: cardSize, height: cardSize }]}>
-        {source ? (
-          round.cover_is_video
-            ? <VideoThumb source={source} style={StyleSheet.absoluteFill} />
-            : <Image source={source} style={StyleSheet.absoluteFill} contentFit="cover" contentPosition="center" />
-        ) : null}
-        <RoleBadge role={round.role} />
-      </View>
+    <TouchableOpacity style={[s.cardWrap, { width: cardSize }]} activeOpacity={0.88} onPress={onPress}>
+      <View style={s.card}>
+        {/* Square image with badge overlay */}
+        <View style={[s.cardImage, { width: cardSize, height: cardSize }]}>
+          {source ? (
+            round.cover_is_video
+              ? <VideoThumb source={source} style={StyleSheet.absoluteFill} />
+              : <Image source={source} style={StyleSheet.absoluteFill} contentFit="cover" contentPosition="center" />
+          ) : null}
+          <RoleBadge role={round.role} />
+        </View>
 
-      {/* Text below image */}
-      <View style={s.cardInfo}>
-        <Text style={s.cardTitle} numberOfLines={2}>
-          {round.course_name ?? 'Golf Round'}
-        </Text>
-        <Text style={s.cardDate}>
-          {round.scheduled_at ? fmtCardDate(round.scheduled_at) : 'Date TBD'}
-        </Text>
+        {/* Text below image */}
+        <View style={s.cardInfo}>
+          <Text style={s.cardTitle} numberOfLines={2}>
+            {round.course_name ?? 'Golf Round'}
+          </Text>
+          <Text style={s.cardDate}>
+            {round.scheduled_at ? fmtCardDate(round.scheduled_at) : 'Date TBD'}
+          </Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -138,7 +140,8 @@ function ReplyCard({ round, cardSize, userId, onNavigate }: {
 
   const source = getCoverSource(round);
   return (
-    <View style={[s.card, { width: cardSize }]}>
+    <View style={[s.cardWrap, { width: cardSize }]}>
+      <View style={s.card}>
       <View style={[s.cardImage, { width: cardSize, height: cardSize }]}>
         {source ? (
           round.cover_is_video
@@ -173,6 +176,7 @@ function ReplyCard({ round, cardSize, userId, onNavigate }: {
             </TouchableOpacity>
           </View>
         )}
+      </View>
       </View>
     </View>
   );
@@ -259,18 +263,7 @@ export default function HomeScreen() {
   return (
     <View style={s.root}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: Colors.green }}>
-        <TopBar
-          right={
-            <Avatar
-              initials={profile?.initials ?? '?'}
-              bg={profile?.avatar_color ?? Colors.cream}
-              textColor={profile?.avatar_text_color ?? Colors.green}
-              size={32}
-              borderWidth={0}
-              borderColor="transparent"
-            />
-          }
-        />
+        <TopBar />
       </SafeAreaView>
 
       <ScrollView
@@ -278,7 +271,7 @@ export default function HomeScreen() {
         contentContainerStyle={[s.content, { paddingBottom: insets.bottom + 80 }]}
         showsVerticalScrollIndicator={false}
       >
-        {isEmpty ? (
+{isEmpty ? (
           <EmptyState />
         ) : (
           <>
@@ -375,6 +368,14 @@ const s = StyleSheet.create({
     paddingBottom: 4,
   },
 
+  cardWrap: {
+    borderRadius: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.07,
+    shadowRadius: 4,
+    elevation: 2,
+  },
   card: {
     borderRadius: 14,
     backgroundColor: Colors.card,

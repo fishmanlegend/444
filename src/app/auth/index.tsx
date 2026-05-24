@@ -49,7 +49,7 @@ export default function PhoneScreen() {
     <SafeAreaView style={s.root} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         style={s.inner}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         {/* Wordmark + tagline */}
         <View style={s.top}>

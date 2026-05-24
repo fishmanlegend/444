@@ -17,10 +17,10 @@ import type { Round, RoundPlayer, GuestRsvp, RoundFormat, RsvpStatus } from '@/l
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const FORMAT_LABEL: Record<RoundFormat, string> = {
-  stroke: 'Stroke play', skins: 'Skins', stableford: 'Stableford', match: 'Match play', other: 'Other',
+  stroke: 'Stroke play', skins: 'Skins', stableford: 'Stableford', match: 'Match play', best_ball: 'Best ball', other: 'Other',
 };
 
-function getCoverSource(round: Round): number | null {
+function getCoverSource(round: Round): string | null {
   if (!round.cover_image_id) return null;
   if (round.cover_is_video) return PRESET_GIFS.find((g) => g.id === round.cover_image_id)?.source ?? null;
   return PRESET_IMAGES.find((i) => i.id === round.cover_image_id)?.source ?? null;
@@ -48,7 +48,7 @@ interface GuestItem {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function VideoCover({ source, style }: { source: number; style: object }) {
+function VideoCover({ source, style }: { source: string; style: object }) {
   const player = useVideoPlayer(source, (p) => { p.loop = true; p.muted = true; p.play(); });
   return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
 }

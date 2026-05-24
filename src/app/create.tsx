@@ -3,9 +3,11 @@ import DateTimePicker, {
 } from '@react-native-community/datetimepicker';
 import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
+  Animated,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -14,12 +16,10 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
-
-const GOOGLE_PLACES_KEY = 'AIzaSyCBg-Tq8VIWljmdsT5FDaO_SYoGhSPomgs'; // TODO: rotate + restrict before shipping
 
 import { Avatar } from '@/components/Avatar';
 import { Button } from '@/components/Button';
@@ -30,7 +30,9 @@ import { PRESET_GIFS } from '@/constants/presetGifs';
 import { CoverPickerModal } from '@/components/CoverPickerModal';
 import { useAuth } from '@/context/auth';
 import { bulkInviteToRound, createRound, getClubWithMembers } from '@/lib/db';
-import type { Club } from '@/lib/database.types';
+import { pollStore } from '@/lib/pollStore';
+import { locationStore } from '@/lib/locationStore';
+import type { Club, RoundFormat } from '@/lib/database.types';
 
 // ─── Smart defaults ───────────────────────────────────────────────────────────
 
@@ -50,14 +52,21 @@ function defaultTeeTime(): Date {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const FORMATS = ['Stroke play', 'Match play', 'Stableford', 'Skins', 'Other'];
-const FORMAT_MAP: Record<string, 'stroke' | 'match' | 'stableford' | 'skins' | 'other'> = {
-  'Stroke play': 'stroke', 'Match play': 'match', 'Stableford': 'stableford', 'Skins': 'skins', 'Other': 'other',
+const MAIN_FORMATS: { label: string; value: RoundFormat }[] = [
+  { label: 'Stroke play', value: 'stroke' },
+  { label: 'Match play',  value: 'match' },
+  { label: 'Stableford', value: 'stableford' },
+  { label: 'Skins',      value: 'skins' },
+];
+
+const FORMAT_DISPLAY: Record<RoundFormat, string> = {
+  stroke: 'Stroke play', match: 'Match play', stableford: 'Stableford',
+  skins: 'Skins', best_ball: 'Best ball', other: 'Other',
 };
 
 // ─── Video cover preview ─────────────────────────────────────────────────────
 
-function VideoCoverPreview({ source, style }: { source: number; style: object }) {
+function VideoCoverPreview({ source, style }: { source: string; style: object }) {
   const player = useVideoPlayer(source, (p) => {
     p.loop = true;
     p.muted = true;
@@ -98,30 +107,122 @@ function PickerSheet({
   );
 }
 
+// ─── Format picker (two-panel horizontal slide) ───────────────────────────────
+
+function FormatPickerContent({
+  selected,
+  slideAnim,
+  onSelect,
+}: {
+  selected: RoundFormat | null;
+  slideAnim: Animated.Value;
+  onSelect: (f: RoundFormat) => void;
+}) {
+  const { width } = useWindowDimensions();
+
+  function goToOther() {
+    Animated.timing(slideAnim, { toValue: -width, duration: 220, useNativeDriver: true }).start();
+  }
+  function goBack() {
+    Animated.timing(slideAnim, { toValue: 0, duration: 220, useNativeDriver: true }).start();
+  }
+
+  return (
+    <View style={{ overflow: 'hidden' }}>
+      <Animated.View style={{ flexDirection: 'row', width: width * 2, transform: [{ translateX: slideAnim }] }}>
+
+        {/* Panel 1 — main formats */}
+        <View style={{ width }}>
+          <View style={s.formatList}>
+            {MAIN_FORMATS.map((f, i) => (
+              <TouchableOpacity
+                key={f.value}
+                style={[s.formatOption, i < MAIN_FORMATS.length && s.formatOptionBorder]}
+                onPress={() => onSelect(f.value)}
+                activeOpacity={0.7}
+              >
+                <Text style={[s.formatOptionText, selected === f.value && s.formatOptionActive]}>{f.label}</Text>
+                {selected === f.value && <Text style={s.checkmark}>✓</Text>}
+              </TouchableOpacity>
+            ))}
+            {/* Other → navigation row */}
+            <TouchableOpacity style={s.formatOption} onPress={goToOther} activeOpacity={0.7}>
+              <Text style={s.formatOptionText}>Other</Text>
+              <Text style={s.formatChevron}>›</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Panel 2 — other formats */}
+        <View style={{ width }}>
+          <View style={s.formatList}>
+            {/* Back nav */}
+            <TouchableOpacity style={[s.formatOption, s.formatOptionBorder]} onPress={goBack} activeOpacity={0.7}>
+              <Text style={s.formatBackText}>‹ Back</Text>
+            </TouchableOpacity>
+            {/* Best Ball */}
+            <TouchableOpacity
+              style={[s.formatOption, s.formatOptionBorder]}
+              onPress={() => onSelect('best_ball')}
+              activeOpacity={0.7}
+            >
+              <Text style={[s.formatOptionText, selected === 'best_ball' && s.formatOptionActive]}>Best Ball</Text>
+              {selected === 'best_ball' && <Text style={s.checkmark}>✓</Text>}
+            </TouchableOpacity>
+            {/* Practice / Range — stub */}
+            <TouchableOpacity style={[s.formatOption, s.formatOptionBorder]} activeOpacity={1} disabled>
+              <Text style={s.formatOptionDim}>Practice / Range</Text>
+              <Text style={s.formatComingSoon}>Coming soon</Text>
+            </TouchableOpacity>
+            {/* Custom — stub */}
+            <TouchableOpacity style={s.formatOption} activeOpacity={1} disabled>
+              <Text style={s.formatOptionDim}>Custom</Text>
+              <Text style={s.formatComingSoon}>Coming soon</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+      </Animated.View>
+    </View>
+  );
+}
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 const DEFAULT_PARS = [4,4,3,4,5,3,4,5,4, 4,3,4,5,4,3,5,4,4];
 
+
 export default function CreateScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { profile } = useAuth();
+  const { session, profile } = useAuth();
+  const userId = session?.user.id ?? (__DEV__ ? '46bae3d3-2c18-450e-b267-f36b91a94a31' : null);
   const { club_id: clubIdParam } = useLocalSearchParams<{ club_id?: string }>();
   const [saving, setSaving] = useState(false);
   const [sourceClub, setSourceClub] = useState<Club | null>(null);
 
   const [eventName, setEventName] = useState('The Next Round');
-  const [coverImage, setCoverImage] = useState<number>(DEFAULT_COVER);
+  const [coverImage, setCoverImage] = useState<string>(DEFAULT_COVER);
   const [coverIsVideo, setCoverIsVideo] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [date, setDate] = useState<Date | null>(null);
   const [time, setTime] = useState<Date | null>(null);
   const [courseName, setCourseName] = useState('');
-  const [formatIdx, setFormatIdx] = useState(0);
+  const [selectedFormat, setSelectedFormat] = useState<RoundFormat | null>(null);
+  const formatSlide = useRef(new Animated.Value(0)).current;
   const [spots, setSpots] = useState(4);
   const [cost, setCost] = useState('');
   const [pollGuests, setPollGuests] = useState(false);
   const [note, setNote] = useState('');
+
+  // Sync state back from standalone screens on return
+  useFocusEffect(
+    useCallback(() => {
+      setPollGuests(pollStore.isActive());
+      const loc = locationStore.get();
+      if (loc) setCourseName(loc);
+    }, [])
+  );
 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -144,7 +245,7 @@ export default function CreateScreen() {
   const metaPreview = [
     date ? fmtDate(date) : 'Date TBD',
     time ? fmtTime(time) : null,
-    FORMATS[formatIdx],
+    selectedFormat !== null ? FORMAT_DISPLAY[selectedFormat] : null,
     `${spots} spots`,
   ]
     .filter(Boolean)
@@ -235,33 +336,49 @@ export default function CreateScreen() {
         <View style={s.drawer}>
           <View style={s.handle} />
 
-          {/* Date & tee time */}
-          <View style={s.fieldStack}>
-            <TouchableOpacity onPress={() => setShowDatePicker(true)} activeOpacity={0.7}>
-              <View style={s.fieldRow}>
-                <Text style={s.fieldLabel}>Date</Text>
-                <Text style={date ? s.fieldValue : s.fieldValueDim}>
-                  {date ? fmtDate(date) : 'Pick a date'}
-                </Text>
-              </View>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowTimePicker(true)} activeOpacity={0.7}>
-              <View style={[s.fieldRow, s.fieldRowLast]}>
-                <Text style={s.fieldLabel}>Tee time</Text>
-                <Text style={time ? s.fieldValue : s.fieldValueDim}>
-                  {time ? fmtTime(time) : 'Pick a time'}
-                </Text>
-              </View>
-            </TouchableOpacity>
-          </View>
+          {/* Date & tee time — hidden when polling */}
+          {!pollGuests && (
+            <View style={s.fieldStack}>
+              <TouchableOpacity onPress={() => setShowDatePicker(true)} activeOpacity={0.7}>
+                <View style={s.fieldRow}>
+                  <Text style={s.fieldLabel}>Date</Text>
+                  <Text style={date ? s.fieldValue : s.fieldValueDim}>
+                    {date ? fmtDate(date) : 'Pick a date'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowTimePicker(true)} activeOpacity={0.7}>
+                <View style={[s.fieldRow, s.fieldRowLast]}>
+                  <Text style={s.fieldLabel}>Tee time</Text>
+                  <Text style={time ? s.fieldValue : s.fieldValueDim}>
+                    {time ? fmtTime(time) : 'Pick a time'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          )}
 
-          {/* Poll guests — inline, under date/time */}
+          {/* Poll guests row */}
           <TouchableOpacity
             style={s.pollRow}
-            onPress={() => setPollGuests(!pollGuests)}
+            onPress={() => {
+              if (pollGuests) {
+                pollStore.clear();
+                setPollGuests(false);
+              } else {
+                router.push('/poll-setup' as any);
+              }
+            }}
             activeOpacity={0.7}
           >
-            <Text style={s.pollText}>Not sure on time? Poll your guests</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={s.pollText}>Not sure on date? Poll your guests</Text>
+              {pollGuests && (
+                <Text style={s.pollSummary}>
+                  {pollStore.getOptions().length} options · tap to edit
+                </Text>
+              )}
+            </View>
             <View style={[s.toggle, pollGuests && s.toggleOn]}>
               <View style={[s.knob, pollGuests && s.knobOn]} />
             </View>
@@ -269,7 +386,7 @@ export default function CreateScreen() {
 
           {/* Course, format, spots, cost */}
           <View style={s.fieldStack}>
-            <TouchableOpacity onPress={() => setShowCourseSearch(true)} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => router.push('/location-search' as any)} activeOpacity={0.7}>
               <View style={s.fieldRow}>
                 <Text style={s.fieldLabel}>Location</Text>
                 <View style={s.rowRight}>
@@ -284,7 +401,9 @@ export default function CreateScreen() {
               <View style={s.fieldRow}>
                 <Text style={s.fieldLabel}>Format</Text>
                 <View style={s.rowRight}>
-                  <Text style={s.fieldValue}>{FORMATS[formatIdx]}</Text>
+                  <Text style={selectedFormat !== null ? s.fieldValue : s.fieldValueDim}>
+                    {selectedFormat !== null ? FORMAT_DISPLAY[selectedFormat] : 'e.g. Stroke play'}
+                  </Text>
                   <Text style={s.chevron}>›</Text>
                 </View>
               </View>
@@ -310,7 +429,7 @@ export default function CreateScreen() {
               </View>
             </View>
             <View style={[s.fieldRow, s.fieldRowLast]}>
-              <Text style={s.fieldLabel}>Cost / person</Text>
+              <Text style={s.fieldLabel}>Cost per person</Text>
               <TextInput
                 style={[s.fieldValue, s.inlineInput]}
                 value={cost}
@@ -348,7 +467,11 @@ export default function CreateScreen() {
             label={saving ? 'Creating...' : 'Create & invite 🏌️'}
             variant="primary"
             onPress={async () => {
-              if (saving || !profile) return;
+              if (saving || !userId) return;
+              if (selectedFormat === null) {
+                Alert.alert('Pick a format', 'Choose a game format before creating the round.');
+                return;
+              }
               setSaving(true);
 
               // Resolve cover ID from source number
@@ -356,11 +479,11 @@ export default function CreateScreen() {
               const matched = allImages.find((i) => i.source === coverImage);
 
               const round = await createRound({
-                hostId: profile.id,
+                hostId: userId,
                 clubId: sourceClub?.id ?? null,
                 title: eventName || null,
                 courseName: courseName || null,
-                format: FORMAT_MAP[FORMATS[formatIdx]],
+                format: selectedFormat!,
                 scheduledAt: date && time
                   ? new Date(
                       date.getFullYear(), date.getMonth(), date.getDate(),
@@ -381,13 +504,17 @@ export default function CreateScreen() {
 
               if (round && sourceClub?.members) {
                 const memberIds = sourceClub.members
-                  .filter((m) => m.user_id !== profile.id && m.status === 'member')
+                  .filter((m) => m.user_id !== userId && m.status === 'member')
                   .map((m) => m.user_id);
                 if (memberIds.length > 0) await bulkInviteToRound(round.id, memberIds);
               }
 
               setSaving(false);
-              if (round) router.replace(`/manage/${round.id}`);
+              if (round) {
+                router.replace(`/send-invites/${round.id}`);
+              } else {
+                Alert.alert('Error', 'Failed to create round — check Metro logs for details.');
+              }
             }}
           />
         </View>
@@ -440,75 +567,28 @@ export default function CreateScreen() {
       {/* ── Format picker ── */}
       <PickerSheet
         visible={showFormatModal}
-        onClose={() => setShowFormatModal(false)}
+        onClose={() => {
+          setShowFormatModal(false);
+          formatSlide.setValue(0);
+        }}
         title="Format"
       >
-        <View style={s.formatList}>
-          {FORMATS.map((f, i) => (
-            <TouchableOpacity
-              key={i}
-              style={[s.formatOption, i < FORMATS.length - 1 && s.formatOptionBorder]}
-              onPress={() => {
-                setFormatIdx(i);
-                setShowFormatModal(false);
-              }}
-              activeOpacity={0.7}
-            >
-              <Text style={[s.formatOptionText, i === formatIdx && s.formatOptionActive]}>
-                {f}
-              </Text>
-              {i === formatIdx && <Text style={s.checkmark}>✓</Text>}
-            </TouchableOpacity>
-          ))}
-        </View>
+        <FormatPickerContent
+          selected={selectedFormat}
+          slideAnim={formatSlide}
+          onSelect={(f) => { setSelectedFormat(f); setShowFormatModal(false); formatSlide.setValue(0); }}
+        />
       </PickerSheet>
 
       {/* ── Cover picker ── */}
       <CoverPickerModal
         visible={showPicker}
         current={coverImage}
-        userId={profile?.id}
+        userId={userId ?? undefined}
         onSelect={(source, isVideo) => { setCoverImage(source); setCoverIsVideo(isVideo); }}
         onClose={() => setShowPicker(false)}
       />
 
-      {/* ── Course search modal ── */}
-      <Modal visible={showCourseSearch} animationType="slide" onRequestClose={() => setShowCourseSearch(false)}>
-        <SafeAreaView style={s.courseModal} edges={['top']}>
-          <View style={s.courseModalHeader}>
-            <TouchableOpacity onPress={() => setShowCourseSearch(false)} activeOpacity={0.7}>
-              <Text style={s.courseModalCancel}>Cancel</Text>
-            </TouchableOpacity>
-            <Text style={s.courseModalTitle}>Location</Text>
-            <View style={{ width: 56 }} />
-          </View>
-          <GooglePlacesAutocomplete
-            placeholder="Search..."
-            textInputProps={{ autoFocus: true }}
-            fetchDetails={false}
-            enablePoweredByContainer={false}
-            minLength={2}
-            debounce={300}
-            onPress={(data) => {
-              setCourseName(data.structured_formatting?.main_text ?? data.description);
-              setShowCourseSearch(false);
-            }}
-            onFail={(error) => console.log('Places error:', error)}
-            onNotFound={() => console.log('Places: no results')}
-            query={{ key: GOOGLE_PLACES_KEY, language: 'en' }}
-            styles={{
-              container: { flex: 1 },
-              textInputContainer: s.courseInputContainer,
-              textInput: s.courseInput,
-              listView: s.courseList,
-              row: s.courseRow,
-              description: s.courseRowText,
-              separator: s.courseRowSep,
-              poweredContainer: { display: 'none' },
-            }}
-          />
-        </SafeAreaView>
-      </Modal>
 
       {/* ── Note modal ── */}
       <Modal
@@ -704,12 +784,13 @@ const s = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // Poll guests inline row
+  // Poll guests toggle row
   pollRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 4, paddingVertical: 10, marginBottom: 4,
   },
-  pollText: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted, flex: 1 },
+  pollText: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted },
+  pollSummary: { fontFamily: Fonts.sans, fontSize: 11, color: Colors.green, marginTop: 2 },
 
   // Toggle
   toggle: { width: 30, height: 17, backgroundColor: '#d4d0bc', borderRadius: 20 },
@@ -765,37 +846,12 @@ const s = StyleSheet.create({
   formatOptionBorder: { borderBottomWidth: 0.5, borderBottomColor: Colors.border },
   formatOptionText: { fontFamily: Fonts.sans, fontSize: 16, color: Colors.text },
   formatOptionActive: { fontFamily: Fonts.sansMedium, color: Colors.green },
+  formatOptionDim: { fontFamily: Fonts.sans, fontSize: 16, color: Colors.muted },
+  formatChevron: { fontFamily: Fonts.sans, fontSize: 18, color: Colors.muted },
+  formatBackText: { fontFamily: Fonts.sansMedium, fontSize: 15, color: Colors.green },
+  formatComingSoon: { fontFamily: Fonts.sans, fontSize: 11, color: Colors.muted, backgroundColor: Colors.creamLight, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   checkmark: { fontFamily: Fonts.sansMedium, fontSize: 16, color: Colors.green },
 
-  // Course search modal
-  courseModal: { flex: 1, backgroundColor: Colors.bg },
-  courseModalHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 14,
-    borderBottomWidth: 0.5, borderBottomColor: Colors.border,
-  },
-  courseModalTitle: { fontFamily: Fonts.sansMedium, fontSize: 15, color: Colors.text  },
-  courseModalCancel: { fontFamily: Fonts.sans, fontSize: 15, color: Colors.green, width: 56 },
-  courseInputContainer: {
-    backgroundColor: Colors.bg,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderBottomWidth: 0.5,
-    borderBottomColor: Colors.border,
-  },
-  courseInput: {
-    fontFamily: Fonts.sans,
-    fontSize: 15,
-    color: Colors.text,
-    backgroundColor: Colors.creamLight,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    height: 42,
-  },
-  courseList: { backgroundColor: Colors.bg },
-  courseRow: { paddingHorizontal: 16, paddingVertical: 14, backgroundColor: Colors.bg },
-  courseRowText: { fontFamily: Fonts.sans, fontSize: 14, color: Colors.text },
-  courseRowSep: { height: 0.5, backgroundColor: Colors.border, marginHorizontal: 16 },
 
   // Note sheet
   noteSheet: { paddingBottom: 0 },

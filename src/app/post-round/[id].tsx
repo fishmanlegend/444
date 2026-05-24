@@ -131,10 +131,10 @@ export default function PostRoundScreen() {
     if (!id) return;
     setCompleting(true);
     if (round && round.status !== 'completed') {
-      const playerIds = (round.players as RoundPlayer[])
-        .filter((p) => p.rsvp === 'in')
-        .map((p) => p.player_id);
-      await finalizeRound(id, playerIds, round.host_id, round.scheduled_at);
+      const confirmedPlayers = (round.players as RoundPlayer[]).filter((p) => p.rsvp === 'in');
+      const playerIds = confirmedPlayers.map((p) => p.player_id).filter(Boolean) as string[];
+      const winnerId = standings[0]?.player?.player_id ?? null;
+      await finalizeRound(id, playerIds, round.host_id, round.scheduled_at, undefined, undefined, winnerId);
     } else if (!round || round.status !== 'completed') {
       await updateRoundStatus(id, 'completed');
     }

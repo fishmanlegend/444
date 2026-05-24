@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useAuth } from '@/context/auth';
 import {
   ActivityIndicator, ScrollView, StyleSheet, Text,
-  TouchableOpacity, View,
+  TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -14,6 +15,7 @@ import {
   getMatchTeams, upsertMatchTeam, deleteMatchTeam,
   getMatchHoles, upsertMatchHole,
 } from '@/lib/db';
+import { EditPlayersSheet } from '@/components/EditPlayersSheet';
 import type { Round, RoundPlayer, Hole } from '@/lib/database.types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -23,10 +25,33 @@ type ResultMap = Record<number, 'a' | 'b' | 'halve'>;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function effId(p: RoundPlayer): string {
+  return (p.player_id ?? p.temp_player_id) ?? '';
+}
+
+function effName(p: RoundPlayer): string {
+  if (p.player_id) return ((p as any).profile?.name as string) ?? 'Player';
+  return ((p as any).temp_player?.name as string) ?? 'Guest';
+}
+
+function effInitials(p: RoundPlayer): string {
+  if (p.player_id) return ((p as any).profile?.initials as string) ?? '?';
+  const name: string = ((p as any).temp_player?.name as string) ?? '';
+  return name.split(/\s+/).map((w) => w[0]?.toUpperCase() ?? '').slice(0, 2).join('') || '?';
+}
+
+function effAvatarColor(p: RoundPlayer): string {
+  return p.player_id ? (((p as any).profile?.avatar_color as string) ?? '#284726') : '#7a7060';
+}
+
+function effAvatarTextColor(p: RoundPlayer): string {
+  return p.player_id ? (((p as any).profile?.avatar_text_color as string) ?? '#d8d6af') : '#fff';
+}
+
 function teamName(players: RoundPlayer[], team: 'a' | 'b', teams: TeamMap): string {
-  const tp = players.filter((p) => teams[p.player_id] === team);
+  const tp = players.filter((p) => teams[effId(p)] === team);
   if (!tp.length) return team === 'a' ? 'Team A' : 'Team B';
-  const first = (((tp[0] as any).profile?.name as string) ?? '').split(' ')[0];
+  const first = effName(tp[0]).split(' ')[0];
   return tp.length > 1 ? `${first}'s` : first;
 }
 
@@ -88,13 +113,22 @@ export default function MatchScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { session } = useAuth();
+  const userId = session?.user.id ?? (__DEV__ ? '46bae3d3-2c18-450e-b267-f36b91a94a31' : null);
 
-  const [round, setRound]     = useState<(Round & { players: RoundPlayer[] }) | null>(null);
-  const [holes, setHoles]     = useState<Hole[]>([]);
-  const [teams, setTeams]     = useState<TeamMap>({});
-  const [results, setResults] = useState<ResultMap>({});
-  const [phase, setPhase]     = useState<'setup' | 'scoring'>('setup');
-  const [loading, setLoading] = useState(true);
+  const [round, setRound]       = useState<(Round & { players: RoundPlayer[] }) | null>(null);
+  const [dbHoles, setDbHoles]   = useState<Hole[]>([]);
+  const [holes, setHoles]       = useState<Hole[]>([]);
+  const [teams, setTeams]       = useState<TeamMap>({});
+  const [results, setResults]   = useState<ResultMap>({});
+  const [phase, setPhase]       = useState<'setup' | 'scoring'>('setup');
+  const [totalHoles, setTotalHoles] = useState(18);
+  const [holeMode, setHoleMode] = useState<'9' | '18' | '36' | 'custom'>('18');
+  const [customText, setCustomText] = useState('');
+  const [loading, setLoading]   = useState(true);
+  const [showEditSheet, setShowEditSheet] = useState(false);
+
+  const DEFAULT_PARS = [4,4,3,4,5,3,4,5,4,4,3,4,5,4,3,5,4,4];
 
   useEffect(() => {
     if (!id) return;
@@ -105,25 +139,60 @@ export default function MatchScreen() {
       getMatchHoles(id).catch(() => []),
     ]).then(([r, h, mt, mh]) => {
       setRound(r);
-      setHoles(h);
+      setDbHoles(h);
+      // totalHoles defaults to 18; user can change in setup
       const tm: TeamMap = {};
       for (const t of mt) tm[t.player_id] = t.team;
       setTeams(tm);
       const rm: ResultMap = {};
       for (const hole of mh) if (hole.result) rm[hole.hole_number] = hole.result;
       setResults(rm);
-      if (mt.length >= 2) setPhase('scoring');
       setLoading(false);
     });
   }, [id]);
 
-  const toggle = useCallback(async (pid: string, t: 'a' | 'b') => {
+  async function reloadRound() {
+    if (!id) return;
+    const r = await getRoundWithPlayers(id);
+    if (r) setRound(r);
+  }
+
+  function buildHoles(h: Hole[], nh: number, rid: string): Hole[] {
+    return h.length > 0
+      ? h.slice(0, nh)
+      : Array.from({ length: nh }, (_, i) => ({
+          round_id: rid,
+          hole_number: i + 1,
+          par: DEFAULT_PARS[i] ?? 4,
+          yardage: null,
+        })) as Hole[];
+  }
+
+  function selectHoleMode(mode: '9' | '18' | '36' | 'custom') {
+    setHoleMode(mode);
+    if (mode === '9') setTotalHoles(9);
+    else if (mode === '18') setTotalHoles(18);
+    else if (mode === '36') setTotalHoles(36);
+  }
+
+  function handleCustomChange(text: string) {
+    setCustomText(text);
+    const n = parseInt(text, 10);
+    if (!isNaN(n) && n > 0) setTotalHoles(n);
+  }
+
+  function startMatch() {
+    setHoles(buildHoles(dbHoles, totalHoles, id!));
+    setPhase('scoring');
+  }
+
+  const toggle = useCallback(async (pid: string, t: 'a' | 'b', isTempPlayer: boolean) => {
     if (teams[pid] === t) {
       setTeams((prev) => { const n = { ...prev }; delete n[pid]; return n; });
-      deleteMatchTeam(id!, pid).catch(() => {});
+      if (!isTempPlayer) deleteMatchTeam(id!, pid).catch(() => {});
     } else {
       setTeams((prev) => ({ ...prev, [pid]: t }));
-      upsertMatchTeam(id!, pid, t).catch(() => {});
+      if (!isTempPlayer) upsertMatchTeam(id!, pid, t).catch(() => {});
     }
   }, [id, teams]);
 
@@ -163,6 +232,7 @@ export default function MatchScreen() {
   const aCount    = Object.values(teams).filter((t) => t === 'a').length;
   const bCount    = Object.values(teams).filter((t) => t === 'b').length;
   const canStart  = aCount >= 1 && bCount >= 1;
+  const hostId    = round.host_id;
 
   let scoreText: string, statusText: string;
   if (played === 0)      { scoreText = 'All Square'; statusText = `${round.total_holes} to play`; }
@@ -174,44 +244,49 @@ export default function MatchScreen() {
   return (
     <View style={g.root}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: Colors.green }}>
-        <TopBar
-          left={
-            <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+        {phase === 'setup' ? (
+          <View style={g.topBar}>
+            <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')} activeOpacity={0.7} style={g.topBarBackHit}>
               <Text style={g.back}>← Back</Text>
             </TouchableOpacity>
-          }
-          right={<Text style={g.courseLabel}>{round.course_name ?? 'Match play'}</Text>}
-        />
+            <Text style={g.topBarTitle}>Match Play</Text>
+          </View>
+        ) : (
+          <TopBar
+            left={
+              <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')} activeOpacity={0.7}>
+                <Text style={g.back}>← Back</Text>
+              </TouchableOpacity>
+            }
+            right={<Text style={g.courseLabel}>{round.course_name ?? ''}</Text>}
+          />
+        )}
 
         {/* Score header — scoring phase only */}
         {phase === 'scoring' && (
           <View style={g.scoreHeader}>
             <View style={g.teamStack}>
-              {players.filter((p) => teams[p.player_id] === 'a').map((p, i) => {
-                const pr = (p as any).profile;
-                return (
-                  <Avatar key={p.player_id}
-                    initials={pr?.initials ?? '?'}
-                    bg={pr?.avatar_color ?? Colors.green}
-                    textColor={pr?.avatar_text_color ?? Colors.cream}
-                    size={30} borderWidth={1.5} borderColor="rgba(216,214,175,0.4)"
-                    style={{ marginRight: -8, zIndex: 10 - i }}
-                  />
-                );
-              })}
+              {players.filter((p) => teams[effId(p)] === 'a').map((p, i) => (
+                <Avatar key={effId(p)}
+                  initials={effInitials(p)}
+                  bg={effAvatarColor(p)}
+                  textColor={effAvatarTextColor(p)}
+                  size={30} borderWidth={1.5} borderColor="rgba(216,214,175,0.4)"
+                  style={{ marginRight: -8, zIndex: 10 - i }}
+                />
+              ))}
             </View>
             <View style={g.scoreMid}>
               <Text style={g.scoreMain}>{scoreText}</Text>
               <Text style={g.scoreSub}>{statusText}</Text>
             </View>
             <View style={[g.teamStack, { flexDirection: 'row-reverse' }]}>
-              {players.filter((p) => teams[p.player_id] === 'b').map((p, i) => {
-                const pr = (p as any).profile;
+              {players.filter((p) => teams[effId(p)] === 'b').map((p, i) => {
                 return (
-                  <Avatar key={p.player_id}
-                    initials={pr?.initials ?? '?'}
-                    bg={pr?.avatar_color ?? Colors.green}
-                    textColor={pr?.avatar_text_color ?? Colors.cream}
+                  <Avatar key={effId(p)}
+                    initials={effInitials(p)}
+                    bg={effAvatarColor(p)}
+                    textColor={effAvatarTextColor(p)}
                     size={30} borderWidth={1.5} borderColor="rgba(216,214,175,0.4)"
                     style={{ marginLeft: -8, zIndex: 10 - i }}
                   />
@@ -221,46 +296,49 @@ export default function MatchScreen() {
           </View>
         )}
 
-        {phase === 'setup' && (
-          <View style={g.setupSubtitle}>
-            <Text style={g.setupSubtitleText}>Assign players to teams</Text>
-          </View>
-        )}
       </SafeAreaView>
 
-      {/* Cream drawer */}
-      <View style={[g.drawer, { paddingBottom: insets.bottom + 24 }]}>
-        <View style={g.handle} />
+      {/* ── Setup phase — plain scrollview, no drawer ── */}
+      {phase === 'setup' && (
+        <ScrollView style={{ flex: 1, backgroundColor: Colors.bg }} showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 32 }}>
+            <Text style={su.setupHeading}>Set up the game</Text>
 
-        {/* ── Setup phase ── */}
-        {phase === 'setup' && (
-          <>
-            <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
-              {players.map((p) => {
-                const pr  = (p as any).profile;
-                const cur = teams[p.player_id];
+            {/* Teams card */}
+            <View style={su.fieldCard}>
+              <View style={su.cardLabelRow}>
+                <Text style={su.fieldLabel}>Teams</Text>
+                <TouchableOpacity onPress={() => setShowEditSheet(true)} activeOpacity={0.7}>
+                  <Text style={su.editLink}>Edit players</Text>
+                </TouchableOpacity>
+              </View>
+              {players.map((p, i) => {
+                const eid = effId(p);
+                const cur = teams[eid];
+                const isTempPlayer = p.player_id == null;
                 return (
-                  <View key={p.player_id} style={su.row}>
+                  <View key={eid} style={[su.row, i < players.length - 1 && su.rowBorder]}>
                     <Avatar
-                      initials={pr?.initials ?? '?'}
-                      bg={pr?.avatar_color ?? Colors.green}
-                      textColor={pr?.avatar_text_color ?? Colors.cream}
+                      initials={effInitials(p)}
+                      bg={effAvatarColor(p)}
+                      textColor={effAvatarTextColor(p)}
                       size={34} borderWidth={0} borderColor="transparent"
                     />
                     <Text style={su.name}>
-                      {pr?.name ?? 'Unknown'}
+                      {effName(p)}
                       {p.is_host ? <Text style={su.host}> host</Text> : null}
+                      {isTempPlayer ? <Text style={su.host}> guest</Text> : null}
                     </Text>
                     <View style={su.toggles}>
                       <TouchableOpacity
-                        onPress={() => toggle(p.player_id, 'a')}
+                        onPress={() => toggle(eid, 'a', isTempPlayer)}
                         style={[su.teamBtn, cur === 'a' && su.teamBtnAOn]}
                         activeOpacity={0.7}
                       >
                         <Text style={[su.teamBtnText, cur === 'a' && su.teamBtnAOnText]}>A</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
-                        onPress={() => toggle(p.player_id, 'b')}
+                        onPress={() => toggle(eid, 'b', isTempPlayer)}
                         style={[su.teamBtn, cur === 'b' && su.teamBtnBOn]}
                         activeOpacity={0.7}
                       >
@@ -270,19 +348,66 @@ export default function MatchScreen() {
                   </View>
                 );
               })}
-            </ScrollView>
+            </View>
+            {/* Holes selector */}
+            <View style={su.fieldCard}>
+              <Text style={su.fieldLabel}>Holes</Text>
+              <View style={su.segRow}>
+                {(['9', '18', '36', 'custom'] as const).map((mode) => (
+                  <TouchableOpacity
+                    key={mode}
+                    style={[su.seg, holeMode === mode && su.segActive]}
+                    onPress={() => selectHoleMode(mode)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[su.segText, holeMode === mode && su.segTextActive]}>
+                      {mode === 'custom' ? 'Custom' : mode}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {holeMode === 'custom' && (
+                <TextInput
+                  style={su.customInput}
+                  value={customText}
+                  onChangeText={handleCustomChange}
+                  keyboardType="number-pad"
+                  placeholder="# of holes"
+                  placeholderTextColor={Colors.muted}
+                  maxLength={3}
+                  autoFocus
+                />
+              )}
+            </View>
+
+            <View style={su.setupNote}>
+              <Text style={su.setupNoteText}>
+                Match play · {totalHoles} holes · {players.length} players
+              </Text>
+            </View>
+
             <TouchableOpacity
               style={[su.startBtn, !canStart && su.startBtnOff]}
-              onPress={canStart ? () => setPhase('scoring') : undefined}
+              onPress={canStart ? startMatch : undefined}
               activeOpacity={0.8}
             >
-              <Text style={su.startBtnText}>Start Match →</Text>
+              <Text style={su.startBtnText}>Start</Text>
             </TouchableOpacity>
-          </>
-        )}
+        </ScrollView>
+      )}
+      <EditPlayersSheet
+        roundId={id ?? ''}
+        hostId={hostId}
+        visible={showEditSheet}
+        currentUserId={userId}
+        onClose={() => setShowEditSheet(false)}
+        onDone={reloadRound}
+      />
 
-        {/* ── Scoring phase ── */}
-        {phase === 'scoring' && (
+      {/* ── Scoring phase — drawer with handle ── */}
+      {phase === 'scoring' && (
+        <View style={[g.drawer, { paddingBottom: insets.bottom + 24 }]}>
+          <View style={g.handle} />
           <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
             {holes.map((hole) => (
               <HoleRow
@@ -302,8 +427,8 @@ export default function MatchScreen() {
               <Text style={sc.reassignText}>← Re-assign teams</Text>
             </TouchableOpacity>
           </ScrollView>
-        )}
-      </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -312,6 +437,12 @@ export default function MatchScreen() {
 
 const g = StyleSheet.create({
   root:       { flex: 1, backgroundColor: Colors.green },
+  topBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 16, paddingVertical: 12, position: 'relative',
+  },
+  topBarTitle: { fontFamily: Fonts.serifMedium, fontSize: 18, color: Colors.cream },
+  topBarBackHit: { position: 'absolute', left: 0, paddingHorizontal: 16, paddingVertical: 12 },
   back:       { fontFamily: Fonts.sans, fontSize: 13, color: 'rgba(216,214,175,0.6)' },
   courseLabel:{ fontFamily: Fonts.sans, fontSize: 13, color: 'rgba(216,214,175,0.6)' },
   notFound:   { fontFamily: Fonts.serifMedium, fontSize: 20, color: Colors.cream },
@@ -352,27 +483,47 @@ const su = StyleSheet.create({
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     paddingVertical: 12,
-    borderBottomWidth: 0.5, borderBottomColor: Colors.border,
   },
   name: { fontFamily: Fonts.sansMedium, fontSize: 14, color: Colors.text, flex: 1 },
   host: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted },
-  toggles: { flexDirection: 'row', gap: 6 },
+  toggles: { flexDirection: 'row', gap: 8, width: 140 },
   teamBtn: {
-    width: 36, height: 32, borderRadius: 8,
+    flex: 1, paddingVertical: 10, borderRadius: 10,
     backgroundColor: Colors.creamLight,
     alignItems: 'center', justifyContent: 'center',
   },
-  teamBtnText: { fontFamily: Fonts.sansSemiBold, fontSize: 13, color: Colors.muted },
+  teamBtnText: { fontFamily: Fonts.sansSemiBold, fontSize: 14, color: Colors.muted },
   teamBtnAOn: { backgroundColor: Colors.green },
   teamBtnAOnText: { color: Colors.cream },
   teamBtnBOn: { backgroundColor: '#7a4020' },
   teamBtnBOnText: { color: '#fff' },
+  fieldCard: {
+    backgroundColor: Colors.card, borderRadius: 14, borderWidth: 0.5,
+    borderColor: Colors.border, padding: 16, gap: 12, marginBottom: 12,
+  },
+  rowBorder: { borderBottomWidth: 0.5, borderBottomColor: Colors.border },
+  setupHeading: { fontFamily: Fonts.serifMedium, fontSize: 24, color: Colors.text, marginBottom: 12, marginTop: 4 },
+  fieldLabel: { fontFamily: Fonts.sans, fontSize: 13, color: Colors.muted, marginBottom: 4 },
+  cardLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  editLink: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.green },
+  setupNote: { paddingVertical: 10, alignItems: 'center' },
+  setupNoteText: { fontFamily: Fonts.sans, fontSize: 13, color: Colors.muted },
+  segRow: { flexDirection: 'row', gap: 8 },
+  seg: { flex: 1, paddingVertical: 8, borderRadius: 10, backgroundColor: Colors.creamLight, alignItems: 'center' },
+  segActive: { backgroundColor: Colors.green },
+  segText: { fontFamily: Fonts.sansMedium, fontSize: 14, color: Colors.text },
+  segTextActive: { color: Colors.cream },
+  customInput: {
+    fontFamily: Fonts.sansSemiBold, fontSize: 20, color: Colors.text,
+    backgroundColor: Colors.creamLight, borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 10, textAlign: 'center',
+  },
   startBtn: {
-    marginTop: 16, backgroundColor: Colors.green,
-    borderRadius: 14, paddingVertical: 15, alignItems: 'center',
+    marginTop: 4, backgroundColor: Colors.green,
+    borderRadius: 14, paddingVertical: 16, alignItems: 'center',
   },
   startBtnOff: { opacity: 0.35 },
-  startBtnText: { fontFamily: Fonts.sansSemiBold, fontSize: 15, color: Colors.cream },
+  startBtnText: { fontFamily: Fonts.sansSemiBold, fontSize: 16, color: Colors.cream },
 });
 
 // Scoring styles

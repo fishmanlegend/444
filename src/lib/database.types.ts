@@ -1,4 +1,4 @@
-export type RoundFormat = 'stroke' | 'skins' | 'stableford' | 'match' | 'other';
+export type RoundFormat = 'stroke' | 'skins' | 'stableford' | 'match' | 'best_ball' | 'other';
 export type RoundStatus = 'upcoming' | 'active' | 'completed' | 'cancelled';
 export type RsvpStatus  = 'in' | 'maybe' | 'out' | 'pending';
 
@@ -75,15 +75,35 @@ export interface Hole {
   yardage: number | null;
 }
 
+export interface TempPlayer {
+  id: string;
+  round_id: string;
+  name: string;
+  phone: string | null;
+  created_by: string;
+  created_at: string;
+  anonymized_at?: string | null;
+}
+
+export interface TempScore {
+  round_id: string;
+  temp_player_id: string;
+  hole_number: number;
+  strokes: number | null;
+  recorded_at: string;
+}
+
 export interface RoundPlayer {
   id: string;
   round_id: string;
-  player_id: string;
+  player_id: string | null;        // null for temp players
+  temp_player_id: string | null;   // non-null for temp players
   rsvp: RsvpStatus;
   is_host: boolean;
   joined_at: string;
   // joined via select
   profile?: Profile;
+  temp_player?: TempPlayer;
 }
 
 export interface Score {
@@ -141,6 +161,8 @@ export interface MatchHole {
   result: 'a' | 'b' | 'halve' | null;
 }
 
+export type InvitePolicy = 'owner_only' | 'officers' | 'any_member';
+
 export interface Club {
   id: string;
   name: string;
@@ -148,10 +170,22 @@ export interface Club {
   banner_image_id: string | null;
   banner_is_video: boolean;
   only_host_can_create_rounds: boolean;
+  invite_policy: InvitePolicy;
   created_at: string;
   // joined
   members?: ClubMember[];
   nextRound?: Round | null;
+}
+
+export interface ClubInvite {
+  id: string;
+  club_id: string;
+  created_by: string;
+  code: string;
+  expires_at: string | null;
+  used_by: string | null;
+  used_at: string | null;
+  created_at: string;
 }
 
 export interface ClubPost {
@@ -171,6 +205,7 @@ export interface ClubMember {
   added_by: string | null;
   joined_at: string;
   status: 'pending' | 'member';
+  role: 'owner' | 'officer' | 'member';
   // joined
   profile?: Profile;
 }
@@ -190,12 +225,15 @@ export type Database = {
       profiles:           { Row: Profile      & R; Insert: (Partial<Profile> & { id: string; phone: string }) & R; Update: Partial<Profile>    & R; Relationships: DbRel[] };
       rounds:             { Row: Round        & R; Insert: Omit<Round, 'id' | 'created_at'>                  & R; Update: Partial<Round>       & R; Relationships: DbRel[] };
       holes:              { Row: Hole         & R; Insert: Hole                                               & R; Update: Partial<Hole>        & R; Relationships: DbRel[] };
-      round_players:      { Row: RoundPlayer  & R; Insert: Omit<RoundPlayer, 'id' | 'joined_at' | 'profile'> & R; Update: Partial<RoundPlayer> & R; Relationships: DbRel[] };
+      round_players:      { Row: RoundPlayer  & R; Insert: (Omit<RoundPlayer, 'id' | 'joined_at' | 'profile' | 'temp_player' | 'player_id' | 'temp_player_id'> & { player_id?: string | null; temp_player_id?: string | null }) & R; Update: Partial<RoundPlayer> & R; Relationships: DbRel[] };
+      temp_players:       { Row: TempPlayer   & R; Insert: Omit<TempPlayer, 'id' | 'created_at' | 'anonymized_at'> & R;       Update: Partial<TempPlayer>   & R; Relationships: DbRel[] };
+      temp_scores:        { Row: TempScore    & R; Insert: TempScore                                                            & R; Update: Partial<TempScore>    & R; Relationships: DbRel[] };
       scores:             { Row: Score        & R; Insert: Score                                              & R; Update: Partial<Score>       & R; Relationships: DbRel[] };
       skins_results:      { Row: SkinsResult  & R; Insert: SkinsResult                                        & R; Update: Partial<SkinsResult> & R; Relationships: DbRel[] };
       pals:               { Row: Pal          & R; Insert: Omit<Pal, 'created_at' | 'profile'>                & R; Update: Partial<Pal>         & R; Relationships: DbRel[] };
-      clubs:              { Row: Club         & R; Insert: Omit<Club, 'id' | 'created_at' | 'members'>                       & R; Update: Partial<Club>        & R; Relationships: DbRel[] };
+      clubs:              { Row: Club         & R; Insert: Omit<Club, 'id' | 'created_at' | 'members' | 'nextRound'>       & R; Update: Partial<Club>        & R; Relationships: DbRel[] };
       club_members:       { Row: ClubMember   & R; Insert: Omit<ClubMember, 'id' | 'joined_at' | 'profile'>               & R; Update: Partial<ClubMember>  & R; Relationships: DbRel[] };
+      club_invites:       { Row: ClubInvite   & R; Insert: Omit<ClubInvite, 'id' | 'created_at' | 'used_by' | 'used_at' | 'code'> & R; Update: Partial<ClubInvite> & R; Relationships: DbRel[] };
       club_posts:         { Row: ClubPost     & R; Insert: Omit<ClubPost, 'id' | 'created_at' | 'profile'>                & R; Update: Partial<ClubPost>    & R; Relationships: DbRel[] };
       match_teams:        { Row: MatchTeam    & R; Insert: MatchTeam                                          & R; Update: Partial<MatchTeam>   & R; Relationships: DbRel[] };
       match_holes:        { Row: MatchHole    & R; Insert: MatchHole                                          & R; Update: Partial<MatchHole>   & R; Relationships: DbRel[] };

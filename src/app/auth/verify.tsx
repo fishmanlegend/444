@@ -76,7 +76,7 @@ export default function VerifyScreen() {
     <SafeAreaView style={s.root} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         style={s.inner}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <View style={s.top}>
           <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>

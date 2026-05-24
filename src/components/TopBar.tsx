@@ -12,9 +12,9 @@ interface TopBarProps {
 export function TopBar({ left, right }: TopBarProps) {
   return (
     <View style={s.bar}>
-      {left ?? <Wordmark />}
-      <View style={s.spacer} />
-      {right}
+      <View style={s.side}>{left}</View>
+      <View style={s.center}><Wordmark /></View>
+      <View style={[s.side, s.sideRight]}>{right}</View>
     </View>
   );
 }
@@ -28,5 +28,17 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  spacer: { flex: 1 },
+  side: {
+    width: 80,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+  },
+  sideRight: {
+    alignItems: 'flex-end',
+  },
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

@@ -2,10 +2,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Linking, Modal, Platform, ScrollView,
-  StyleSheet, Text, TextInput, TouchableOpacity, View,
+  ActivityIndicator, Animated, Linking, Modal, Platform, ScrollView, Share,
+  StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
@@ -21,14 +21,14 @@ import type { Round, RoundPlayer, GuestRsvp, RoundFormat } from '@/lib/database.
 import { useAuth } from '@/context/auth';
 import { CoverPickerModal } from '@/components/CoverPickerModal';
 
-const GOOGLE_PLACES_KEY = 'AIzaSyCBg-Tq8VIWljmdsT5FDaO_SYoGhSPomgs';
+const GOOGLE_PLACES_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY ?? '';
 
 const FORMAT_LABEL: Record<RoundFormat, string> = {
-  stroke: 'Stroke play', skins: 'Skins', stableford: 'Stableford', match: 'Match play', other: 'Other',
+  stroke: 'Stroke play', skins: 'Skins', stableford: 'Stableford', match: 'Match play', best_ball: 'Best ball', other: 'Other',
 };
-const FORMATS: RoundFormat[] = ['stroke', 'match', 'stableford', 'skins', 'other'];
+const FORMATS: RoundFormat[] = ['stroke', 'match', 'stableford', 'skins', 'best_ball', 'other'];
 
-function getCoverSource(round: Round): number | null {
+function getCoverSource(round: Round): string | null {
   if (!round.cover_image_id) return null;
   if (round.cover_is_video) return PRESET_GIFS.find((g) => g.id === round.cover_image_id)?.source ?? null;
   return PRESET_IMAGES.find((i) => i.id === round.cover_image_id)?.source ?? null;
@@ -38,6 +38,7 @@ function scorecardRoute(round: Round): string {
   if (round.format === 'skins') return `/skins/${round.id}`;
   if (round.format === 'stableford') return `/stableford/${round.id}`;
   if (round.format === 'match') return `/match/${round.id}`;
+  if (round.format === 'best_ball') return `/best-ball/${round.id}`;
   return `/scorecard/${round.id}`;
 }
 
@@ -50,7 +51,7 @@ function fmtTime(iso: string) {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function VideoCover({ source, style }: { source: number; style: object }) {
+function VideoCover({ source, style }: { source: string; style: object }) {
   const player = useVideoPlayer(source, (p) => { p.loop = true; p.muted = true; p.play(); });
   return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
 }
@@ -120,6 +121,8 @@ export default function ManageScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showFormatModal, setShowFormatModal] = useState(false);
+  const formatSlide = useRef(new Animated.Value(0)).current;
+  const { width } = useWindowDimensions();
   const [showCostSheet, setShowCostSheet] = useState(false);
   const [showSpotsSheet, setShowSpotsSheet] = useState(false);
   const [showTitleSheet, setShowTitleSheet] = useState(false);
@@ -130,6 +133,10 @@ export default function ManageScreen() {
   useEffect(() => {
     if (!id) return;
     Promise.all([getRoundWithPlayers(id), getGuestRsvps(id)]).then(([r, g]) => {
+      if (r && profile?.id && r.host_id !== profile.id) {
+        router.replace('/(tabs)');
+        return;
+      }
       setRound(r);
       setGuests(g);
       if (r) {
@@ -148,7 +155,7 @@ export default function ManageScreen() {
       setRound((prev) => prev ? { ...prev, ...updates } : prev);
       notifyRoundsChanged();
     } catch (e) {
-      console.error('[manage] save failed', e);
+      if (__DEV__) console.error('[manage] save failed', e);
     }
   }
 
@@ -230,6 +237,18 @@ export default function ManageScreen() {
         {/* ── Drawer ── */}
         <View style={s.drawer}>
           <View style={s.handle} />
+
+          {/* Share invite */}
+          <TouchableOpacity
+            style={s.shareBtn}
+            activeOpacity={0.85}
+            onPress={() => Share.share({
+              message: `You're invited to golf! Open the link to RSVP: cc-golf://invite/${round.id}`,
+              url: `cc-golf://invite/${round.id}`,
+            })}
+          >
+            <Text style={s.shareBtnText}>📤  Share invite link</Text>
+          </TouchableOpacity>
 
           <View style={s.ctaRow}>
             <TouchableOpacity
@@ -392,15 +411,50 @@ export default function ManageScreen() {
       )}
 
       {/* ── Format picker ── */}
-      <PickerSheet visible={showFormatModal} onClose={() => setShowFormatModal(false)} title="Format">
-        <View style={s.formatList}>
-          {FORMATS.map((f, i) => (
-            <TouchableOpacity key={f} style={[s.formatOption, i < FORMATS.length - 1 && s.formatOptionBorder]}
-              onPress={() => { save({ format: f }); setShowFormatModal(false); }} activeOpacity={0.7}>
-              <Text style={[s.formatOptionText, round.format === f && s.formatOptionActive]}>{FORMAT_LABEL[f]}</Text>
-              {round.format === f && <Text style={s.checkmark}>✓</Text>}
-            </TouchableOpacity>
-          ))}
+      <PickerSheet visible={showFormatModal} onClose={() => { setShowFormatModal(false); formatSlide.setValue(0); }} title="Format">
+        {/* Two-panel horizontal slide */}
+        <View style={{ overflow: 'hidden' }}>
+          <Animated.View style={{ flexDirection: 'row', width: width * 2, transform: [{ translateX: formatSlide }] }}>
+            {/* Panel 1 — main formats */}
+            <View style={{ width }}>
+              <View style={s.formatList}>
+                {(['stroke', 'match', 'stableford', 'skins'] as const).map((f, i) => (
+                  <TouchableOpacity key={f} style={[s.formatOption, s.formatOptionBorder]}
+                    onPress={() => { save({ format: f }); setShowFormatModal(false); formatSlide.setValue(0); }} activeOpacity={0.7}>
+                    <Text style={[s.formatOptionText, round.format === f && s.formatOptionActive]}>{FORMAT_LABEL[f]}</Text>
+                    {round.format === f && <Text style={s.checkmark}>✓</Text>}
+                  </TouchableOpacity>
+                ))}
+                <TouchableOpacity style={s.formatOption} activeOpacity={0.7}
+                  onPress={() => Animated.timing(formatSlide, { toValue: -width, duration: 220, useNativeDriver: true }).start()}>
+                  <Text style={s.formatOptionText}>Other</Text>
+                  <Text style={s.formatChevron}>›</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+            {/* Panel 2 — other formats */}
+            <View style={{ width }}>
+              <View style={s.formatList}>
+                <TouchableOpacity style={[s.formatOption, s.formatOptionBorder]} activeOpacity={0.7}
+                  onPress={() => Animated.timing(formatSlide, { toValue: 0, duration: 220, useNativeDriver: true }).start()}>
+                  <Text style={s.formatBackText}>‹ Back</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.formatOption, s.formatOptionBorder]}
+                  onPress={() => { save({ format: 'best_ball' }); setShowFormatModal(false); formatSlide.setValue(0); }} activeOpacity={0.7}>
+                  <Text style={[s.formatOptionText, round.format === 'best_ball' && s.formatOptionActive]}>Best Ball</Text>
+                  {round.format === 'best_ball' && <Text style={s.checkmark}>✓</Text>}
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.formatOption, s.formatOptionBorder]} activeOpacity={1} disabled>
+                  <Text style={s.formatOptionDim}>Practice / Range</Text>
+                  <Text style={s.formatComingSoon}>Coming soon</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={s.formatOption} activeOpacity={1} disabled>
+                  <Text style={s.formatOptionDim}>Custom</Text>
+                  <Text style={s.formatComingSoon}>Coming soon</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Animated.View>
         </View>
       </PickerSheet>
 
@@ -455,7 +509,7 @@ export default function ManageScreen() {
       {/* ── Cover picker ── */}
       <CoverPickerModal
         visible={showCoverPicker}
-        current={coverSource ?? 0}
+        current={coverSource ?? ''}
         userId={profile?.id}
         onSelect={(source, isVideo) => {
           const allCovers = [...PRESET_IMAGES, ...PRESET_GIFS];
@@ -492,6 +546,15 @@ const s = StyleSheet.create({
   courseName: { fontFamily: Fonts.serifMedium, fontSize: 22, color: Colors.cream, marginBottom: 3 },
   courseMeta: { fontFamily: Fonts.sans, fontSize: 13, color: 'rgba(216,214,175,0.6)', marginBottom: 4 },
   spotsText: { fontFamily: Fonts.sans, fontSize: 13, color: 'rgba(216,214,175,0.6)', marginTop: 4 },
+
+  shareBtn: {
+    backgroundColor: Colors.green,
+    borderRadius: 14,
+    paddingVertical: 15,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  shareBtnText: { fontFamily: Fonts.sansSemiBold, fontSize: 15, color: Colors.cream },
 
   ctaRow: { flexDirection: 'row', gap: 8, marginBottom: 24 },
   ctaGhost: { flex: 1, backgroundColor: Colors.creamLight, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
@@ -531,6 +594,10 @@ const s = StyleSheet.create({
   formatOptionBorder: { borderBottomWidth: 0.5, borderBottomColor: Colors.border },
   formatOptionText: { fontFamily: Fonts.sans, fontSize: 16, color: Colors.text },
   formatOptionActive: { fontFamily: Fonts.sansMedium, color: Colors.green },
+  formatOptionDim: { fontFamily: Fonts.sans, fontSize: 16, color: Colors.muted },
+  formatChevron: { fontFamily: Fonts.sans, fontSize: 18, color: Colors.muted },
+  formatBackText: { fontFamily: Fonts.sansMedium, fontSize: 15, color: Colors.green },
+  formatComingSoon: { fontFamily: Fonts.sans, fontSize: 11, color: Colors.muted, backgroundColor: Colors.creamLight, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   checkmark: { fontFamily: Fonts.sansMedium, fontSize: 16, color: Colors.green },
 
   simpleSheetBody: { paddingHorizontal: 20, paddingVertical: 16 },

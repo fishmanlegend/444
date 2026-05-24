@@ -48,10 +48,13 @@ export type BadgeTier = {
 export type BadgeDefinition = {
   id: BadgeId;
   emoji: string;
+  image?: number;
+  imageScale?: number;
   name: string;
+  flavorText: string;
+  statNote?: string;   // clarifies what the underlying stat measures
   tiers: BadgeTier[];
   describe: (threshold: number) => string;
-  // 'lte' for badges where lower stat = better (e.g. best golf score)
   compare?: 'gte' | 'lte';
 };
 
@@ -78,7 +81,7 @@ export type UserStats = {
   guestRounds: number;           // rounds where <50% of players are in user's usual pals
 
   // Hosting
-  largeRoundsHosted: number;     // rounds hosted with 8+ players
+  largeRounds: number;           // rounds played (any role) with 8+ players
   uniqueGroupsHosted: number;    // COUNT(DISTINCT group_hash) where group_hash = sorted player IDs
 
   // Exploration
@@ -115,55 +118,81 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
   {
     id: 'rounds_played',
     emoji: '🏌️',
+    image: require('../assets/badges/badge_rounds_played.png'),
     name: 'Rounds Played',
+    flavorText: 'Show up. Play golf. Repeat until it\'s a lifestyle.',
     describe: (n) => `Played ${n} round${n === 1 ? '' : 's'}`,
     tiers: [
       { threshold: 1,   title: 'First Tee' },
-      { threshold: 10,  title: 'Regular' },
-      { threshold: 50,  title: 'Veteran' },
-      { threshold: 100, title: 'Legend' },
+      { threshold: 5,   title: 'Green Gremlin' },
+      { threshold: 10,  title: 'Bogey Man' },
+      { threshold: 25,  title: 'Swamp Shanker' },
+      { threshold: 50,  title: 'Divot Demon' },
+      { threshold: 100, title: 'Green Goblin' },
+      { threshold: 200, title: 'Iron Giant' },
+      { threshold: 350, title: 'Sir Shanksalot' },
+      { threshold: 500, title: 'Fairwayman' },
     ],
   },
   {
     id: 'rounds_hosted',
-    emoji: '🎯',
+    emoji: '🎤',
+    image: require('../assets/badges/badge_rounds_hosted.png'),
     name: 'Rounds Hosted',
-    describe: (n) => `Hosted ${n} round${n === 1 ? '' : 's'}`,
+    flavorText: 'You send the invites. Legend.',
+    describe: (n) => `Hosted ${n}x`,
     tiers: [
-      { threshold: 1,  title: 'Organizer' },
-      { threshold: 5,  title: 'Club Captain' },
-      { threshold: 15, title: 'Commissioner' },
-      { threshold: 30, title: 'The Fixer' },
+      { threshold: 1,   title: 'Instigator' },
+      { threshold: 3,   title: 'Tee Booker' },
+      { threshold: 5,   title: 'Herd Leader' },
+      { threshold: 15,  title: 'Shot Caller' },
+      { threshold: 25,  title: 'Ringmaster' },
+      { threshold: 50,  title: 'Orchestrator' },
+      { threshold: 100, title: 'AirBnB Superhost' },
+      { threshold: 200, title: 'Alex Trebek' },
     ],
   },
   {
     id: 'pals_made',
     emoji: '🤝',
+    image: require('../assets/badges/badge_pals_made.png'),
     name: 'Pals Made',
-    describe: (n) => `Golfed with ${n} pal${n === 1 ? '' : 's'}`,
+    flavorText: 'Golf is just an excuse to meet people and touch grass.',
+    describe: (n) => `Golfed w/ ${n} pal${n === 1 ? '' : 's'}`,
     tiers: [
-      { threshold: 1,  title: 'Friendly' },
-      { threshold: 10, title: 'Social' },
-      { threshold: 25, title: 'Connector' },
-      { threshold: 50, title: 'Mayor' },
+      { threshold: 1,   title: 'Friendly' },
+      { threshold: 5,   title: 'Social' },
+      { threshold: 10,  title: 'Yapper' },
+      { threshold: 25,  title: 'Connector' },
+      { threshold: 50,  title: 'Networker' },
+      { threshold: 100, title: 'Popular' },
+      { threshold: 200, title: 'Drama Queen' },
+      { threshold: 500, title: 'Zuck' },
     ],
   },
   {
     id: 'streak',
     emoji: '🔥',
+    image: require('../assets/badges/badge_streak.png'),
     name: 'Streak',
-    describe: (n) => `${n} consecutive week${n === 1 ? '' : 's'}`,
+    flavorText: 'Every week, no excuses. Not a problem — a calling.',
+    describe: (n) => `${n} wk${n === 1 ? '' : 's'} in a row`,
     tiers: [
-      { threshold: 2,  title: 'Getting Hooked' },
-      { threshold: 5,  title: 'Weekend Warrior' },
-      { threshold: 10, title: 'Obsessed' },
-      { threshold: 20, title: 'Send Help' },
+      { threshold: 2,  title: 'Streaky' },
+      { threshold: 3,  title: 'Committed' },
+      { threshold: 4,  title: 'Hardcore' },
+      { threshold: 6,  title: 'Sicko' },
+      { threshold: 8,  title: 'Turf Brain' },
+      { threshold: 12, title: 'Seek Help' },
+      { threshold: 24, title: 'Cart Zombie' },
+      { threshold: 52, title: '1-Yr Old' },
     ],
   },
   {
     id: 'courses_played',
     emoji: '🗺️',
     name: 'Courses Played',
+    flavorText: 'New course, same score. Collect them anyway.',
     describe: (n) => `Played ${n} course${n === 1 ? '' : 's'}`,
     tiers: [
       { threshold: 1,  title: 'Local' },
@@ -176,6 +205,7 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
     id: 'early_bird',
     emoji: '🌅',
     name: 'Early Bird',
+    flavorText: 'Up before the sun to hit a ball around. Unhinged.',
     describe: (n) => `${n} early tee time${n === 1 ? '' : 's'}`,
     tiers: [
       { threshold: 2,  title: 'Early Bird' },
@@ -189,20 +219,27 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
   {
     id: 'skins_won',
     emoji: '💰',
+    image: require('../assets/badges/badge_skins_won.png'),
     name: 'Skins Won',
+    flavorText: 'Quietly robbing your friends one hole at a time.',
     describe: (n) => `Won ${n} skin${n === 1 ? '' : 's'}`,
     tiers: [
-      { threshold: 3,  title: 'Lucky' },
-      { threshold: 15, title: 'Hustler' },
-      { threshold: 35, title: 'Shark' },
-      { threshold: 75, title: 'The Bank' },
+      { threshold: 1,   title: 'Lucky' },
+      { threshold: 3,   title: 'Hot Hand' },
+      { threshold: 5,   title: 'Big Winner' },
+      { threshold: 10,  title: 'Millionaire' },
+      { threshold: 20,  title: 'Robber Baron' },
+      { threshold: 50,  title: 'Trust Fund' },
+      { threshold: 100, title: 'Hedge Fund' },
+      { threshold: 200, title: 'Billionaire' },
+      { threshold: 500, title: 'Monopoly Man' },
     ],
   },
   {
     id: 'scoring',
     emoji: '📊',
     name: 'Scoring',
-    // Lower score = better; tiers unlock when bestScore <= threshold
+    flavorText: 'The numbers don\'t lie. Improvement is optional.',
     compare: 'lte',
     describe: (n) => `Best score: ${n}`,
     tiers: [
@@ -216,6 +253,7 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
     id: 'big_winner',
     emoji: '🏆',
     name: 'Big Winner',
+    flavorText: 'Someone had a bad day so you could have a great one.',
     describe: (n) => `Won a $${n}+ pot`,
     tiers: [
       { threshold: 10,  title: 'In the Money' },
@@ -229,19 +267,26 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
   {
     id: 'plus_one',
     emoji: '➕',
+    image: require('../assets/badges/badge_plus_one.png'),
     name: 'Plus One',
-    describe: (n) => `Brought ${n} pal${n === 1 ? '' : 's'} to CC.`,
+    flavorText: 'You brought people to Country Club. They blame you.',
+    statNote: 'Tracks people you\'ve invited to Country Club',
+    describe: (n) => `Invited ${n} pal${n === 1 ? '' : 's'}`,
     tiers: [
-      { threshold: 1,  title: 'Wingman' },
-      { threshold: 3,  title: 'Recruiter' },
-      { threshold: 5,  title: 'Ambassador' },
-      { threshold: 10, title: 'The Introducer' },
+      { threshold: 1,   title: 'Wingman' },
+      { threshold: 3,   title: 'Scout' },
+      { threshold: 5,   title: 'Influencer' },
+      { threshold: 10,  title: 'Evangelist' },
+      { threshold: 25,  title: 'MLM Mommy' },
+      { threshold: 50,  title: 'VP Growth' },
+      { threshold: 100, title: 'Cult Leader' },
     ],
   },
   {
     id: 'connector',
     emoji: '🔗',
     name: 'The Connector',
+    flavorText: 'You didn\'t just invite — you created a host. Golf pyramid scheme.',
     describe: (n) => `${n} invite${n === 1 ? '' : 's'} led to a hosted round`,
     tiers: [
       { threshold: 1,  title: 'Spark' },
@@ -253,20 +298,30 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
   {
     id: 'rivalry',
     emoji: '⚔️',
+    image: require('../assets/badges/badge_rivalry.png'),
     name: 'Rivalry',
-    describe: (n) => `${n} rival${n === 1 ? '' : 'ries'} (5+ matchups)`,
+    flavorText: 'There\'s always that one guy. For you, there are several.',
+    statNote: 'A rival = someone you\'ve played 3+ rounds against',
+    describe: (n) => `${n} rival${n === 1 ? '' : 's'}`,
     tiers: [
-      { threshold: 1, title: 'Getting Personal' },
-      { threshold: 3, title: 'It\'s On' },
-      { threshold: 5, title: 'Nemesis' },
-      { threshold: 10, title: 'Arch Rivals' },
+      { threshold: 1,  title: 'Personal' },
+      { threshold: 2,  title: 'Aaron Burr' },
+      { threshold: 3,  title: 'Beefing' },
+      { threshold: 5,  title: 'Nemeses' },
+      { threshold: 10, title: 'Heated Rivalry' },
+      { threshold: 20, title: 'Hater Arc' },
+      { threshold: 50, title: 'Blood Feud' },
+      { threshold: 75, title: 'Anime Villain' },
+      { threshold: 100, title: 'The Final Boss' },
     ],
   },
   {
     id: 'the_regular',
     emoji: '📅',
     name: 'The Regular',
-    describe: (n) => `${n} round${n === 1 ? '' : 's'} with the same crew`,
+    flavorText: 'Same crew, same jokes. This is peak golf life.',
+    statNote: 'Same crew = 3+ of the same players across rounds',
+    describe: (n) => `${n} round${n === 1 ? '' : 's'} w/ same crew`,
     tiers: [
       { threshold: 5,  title: 'Your People' },
       { threshold: 10, title: 'Crew' },
@@ -277,13 +332,19 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
   {
     id: 'guest_of_honor',
     emoji: '🎟️',
-    name: 'Guest of Honor',
-    describe: (n) => `Ran with ${n} new crew${n === 1 ? '' : 's'}`,
+    image: require('../assets/badges/badge_guest_of_honor.png'),
+    name: 'New Crews',
+    flavorText: 'You fit into any group instantly. Always invited back.',
+    statNote: 'A new crew = a group with none of your usual pals',
+    describe: (n) => `${n} new crew${n === 1 ? '' : 's'}`,
     tiers: [
-      { threshold: 1,  title: 'Fresh Face' },
-      { threshold: 3,  title: 'Open Book' },
-      { threshold: 5,  title: 'Well Rounded' },
-      { threshold: 10, title: 'Everyone\'s Guest' },
+      { threshold: 1,   title: 'Fresh Face' },
+      { threshold: 3,   title: 'Guest of Honor' },
+      { threshold: 5,   title: 'Walk-On' },
+      { threshold: 10,  title: 'Well Known' },
+      { threshold: 25,  title: 'Socialite' },
+      { threshold: 50,  title: 'Be Our Guest' },
+      { threshold: 100, title: 'Belle O\' Ball' },
     ],
   },
 
@@ -291,19 +352,25 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
   {
     id: 'rounds_hosted_large',
     emoji: '🎉',
-    name: 'Party Starter',
-    describe: (n) => `Hosted ${n} round${n === 1 ? '' : 's'} with 8+ players`,
+    image: require('../assets/badges/badge_rounds_hosted_large.png'),
+    name: 'Big Rounds Attended',
+    flavorText: 'Eight+ people on a course might be your fault. Just own it.',
+    statNote: 'A big round = 8+ players',
+    describe: (n) => `${n} big round${n === 1 ? '' : 's'}`,
     tiers: [
-      { threshold: 1,  title: 'You Go Big' },
-      { threshold: 3,  title: 'Fan Favorite' },
-      { threshold: 5,  title: 'Scene Maker' },
-      { threshold: 10, title: 'The Party' },
+      { threshold: 1,  title: 'Partygoer' },
+      { threshold: 3,  title: 'Socialite' },
+      { threshold: 10, title: 'Butterfly' },
+      { threshold: 15, title: 'Carried Away' },
+      { threshold: 25, title: 'Tom & Daisy' },
+      { threshold: 50, title: 'Ibiza' },
     ],
   },
   {
     id: 'host_with_most',
     emoji: '🏠',
     name: 'Host with the Most',
+    flavorText: 'Open door policy. Every group gets a tee time.',
     describe: (n) => `Hosted ${n} unique group${n === 1 ? '' : 's'}`,
     tiers: [
       { threshold: 3,  title: 'Open Door' },
@@ -316,6 +383,8 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
     id: 'reunion',
     emoji: '🎊',
     name: 'The Reunion',
+    flavorText: 'Six months later, same people, same excuses. Nothing changed.',
+    statNote: 'A reunion = 6+ months since your last shared round',
     describe: (n) => `${n} reunion round${n === 1 ? '' : 's'} (6+ months apart)`,
     tiers: [
       { threshold: 1,  title: 'Like It Never Stopped' },
@@ -330,7 +399,7 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
     id: 'road_warrior',
     emoji: '✈️',
     name: 'Road Warrior',
-    // Requires place_id on rounds → city extracted via Google Places API
+    flavorText: 'Travel far. Spend too much. Shoot the same score.',
     describe: (n) => `Played in ${n} cit${n === 1 ? 'y' : 'ies'}`,
     tiers: [
       { threshold: 2,  title: 'Day Tripper' },
@@ -343,6 +412,7 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
     id: 'club',
     emoji: '🪪',
     name: 'Club Member',
+    flavorText: 'You found your people. Either way, you\'re in.',
     describe: (n) => `Member of ${n} club${n === 1 ? '' : 's'}`,
     tiers: [{ threshold: 1, title: 'Member' }],
   },
@@ -352,6 +422,7 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
     id: 'eagle_eye',
     emoji: '🦅',
     name: 'Eagle Eye',
+    flavorText: 'Two under par. You did that on purpose.',
     describe: (n) => `Made ${n} eagle${n === 1 ? '' : 's'}`,
     tiers: [
       { threshold: 3,  title: 'Fortunate' },
@@ -364,6 +435,7 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
     id: 'birdie_machine',
     emoji: '🐦',
     name: 'Birdie Machine',
+    flavorText: 'You make birdies look routine. Partners are furious.',
     describe: (n) => `Made ${n} birdie${n === 1 ? '' : 's'}`,
     tiers: [
       { threshold: 5,   title: 'Birdie' },
@@ -378,7 +450,8 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
     id: 'the_glue',
     emoji: '🫂',
     name: 'The Glue',
-    // glueRounds: rounds where user bridged otherwise disconnected friend groups
+    flavorText: 'Without you, these people never would have met.',
+    statNote: 'Rounds where you bridged two disconnected friend groups',
     describe: (n) => `Kept ${n} group${n === 1 ? '' : 's'} together`,
     tiers: [
       { threshold: 3,  title: 'Glue' },
@@ -391,6 +464,7 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
     id: 'accountant',
     emoji: '📋',
     name: 'Accountant',
+    flavorText: 'You keep score like your life depends on it.',
     describe: (n) => `Kept score for ${n} round${n === 1 ? '' : 's'}`,
     tiers: [
       { threshold: 1,  title: 'Diligent' },
@@ -403,6 +477,7 @@ export const BADGE_DEFINITIONS: BadgeDefinition[] = [
     id: 'photographer',
     emoji: '📸',
     name: 'Photographer',
+    flavorText: 'If there\'s no photo, it didn\'t happen. You get it.',
     describe: (n) => `Shared ${n} photo${n === 1 ? '' : 's'}`,
     tiers: [
       { threshold: 1,  title: 'Snap' },
@@ -425,7 +500,7 @@ export const PROFILE_BADGE_IDS: BadgeId[] = [
   'plus_one',
   'rivalry',
   'guest_of_honor',
-  'club',
+  'rounds_hosted_large',
 ];
 
 // ─── Supabase query hints ─────────────────────────────────────────────────────
@@ -445,7 +520,7 @@ export const PROFILE_BADGE_IDS: BadgeId[] = [
 //   COALESCE(MAX(sp.pot_won),0)                                              AS biggest_skins_pot,
 //   COUNT(DISTINCT ref.new_user_id)                                           AS introductions,
 //   COUNT(DISTINCT ref2.new_user_id) FILTER (WHERE ref2.went_on_to_host)     AS connectors,
-//   -- rivalries: pair-level subquery (rounds_together >= 5)
+//   -- rivalries: pair-level subquery (rounds_together >= 3)
 //   -- regularGroupRounds: group_hash = MD5(sorted player IDs), MAX(count per hash)
 //   -- citiesPlayed: COUNT(DISTINCT place.city) joined via rounds.place_id
 //   -- largeRoundsHosted: rounds hosted where player_count >= 8
@@ -472,7 +547,7 @@ function statForBadge(id: BadgeId, stats: UserStats): number {
     case 'rivalry':             return stats.rivalries;
     case 'the_regular':         return stats.regularGroupRounds;
     case 'guest_of_honor':      return stats.guestRounds;
-    case 'rounds_hosted_large': return stats.largeRoundsHosted;
+    case 'rounds_hosted_large': return stats.largeRounds;
     case 'host_with_most':      return stats.uniqueGroupsHosted;
     case 'reunion':             return stats.reunions;
     case 'road_warrior':        return stats.citiesPlayed;

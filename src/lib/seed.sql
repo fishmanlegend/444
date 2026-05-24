@@ -60,4 +60,38 @@ VALUES
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '55555555-5555-5555-5555-555555555555', 'maybe',   false),
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '66666666-6666-6666-6666-666666666666', 'pending', false),
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '77777777-7777-7777-7777-777777777777', 'pending', false)
-ON CONFLICT (round_id, player_id) DO NOTHING;
+ON CONFLICT DO NOTHING;
+
+-- ── Dev shortcut rounds ───────────────────────────────────────────────────────
+-- These match the hardcoded IDs in the __DEV__ shortcuts in index.tsx.
+-- host_id = dev device user (46bae3d3-…-9023); must already have a profile row.
+
+-- Skins dev round
+INSERT INTO public.rounds (id, host_id, title, course_name, format, scheduled_at, spots, cost_cents, skins_bet_cents, cover_image_id, cover_is_video, note, poll_guests, total_holes, starting_hole, status)
+VALUES (
+  'ff000000-0000-0000-0000-000000000007',
+  '46bae3d3-2c18-450e-b267-f36b91a94a31',
+  'Dev Skins',
+  'Cog Hill No. 4',
+  'skins',
+  (NOW() + INTERVAL '2 days'),
+  8, 2000, 200,
+  'tub', false,
+  NULL,
+  false, 18, 1, 'upcoming'
+) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.holes (round_id, hole_number, par)
+SELECT 'ff000000-0000-0000-0000-000000000007', n,
+  CASE WHEN n IN (3,6,8,12,15,17) THEN 3 WHEN n IN (5,10,13,18) THEN 5 ELSE 4 END
+FROM generate_series(1, 18) n
+ON CONFLICT DO NOTHING;
+
+INSERT INTO public.round_players (round_id, player_id, rsvp, is_host)
+VALUES
+  ('ff000000-0000-0000-0000-000000000007', '46bae3d3-2c18-450e-b267-f36b91a94a31', 'in', true),
+  ('ff000000-0000-0000-0000-000000000007', '11111111-1111-1111-1111-111111111111', 'in', false),
+  ('ff000000-0000-0000-0000-000000000007', '22222222-2222-2222-2222-222222222222', 'in', false),
+  ('ff000000-0000-0000-0000-000000000007', '33333333-3333-3333-3333-333333333333', 'in', false),
+  ('ff000000-0000-0000-0000-000000000007', '44444444-4444-4444-4444-444444444444', 'in', false)
+ON CONFLICT DO NOTHING;

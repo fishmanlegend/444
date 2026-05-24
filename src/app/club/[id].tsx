@@ -1,15 +1,17 @@
 import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { AppIcon } from '@/components/AppIcon';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   ScrollView,
+  Share,
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -24,9 +26,14 @@ import { PRESET_GIFS } from '@/constants/presetGifs';
 import { useAuth } from '@/context/auth';
 import {
   getClubWithMembers, addClubMember, getProfilesExcluding,
-  patchClub, getClubPosts, addClubPost, getClubRounds,
+  patchClub, getClubMessages, getClubRounds, createClubInvite,
 } from '@/lib/db';
-import type { Club, ClubMember, ClubPost, Profile, Round } from '@/lib/database.types';
+import type { Club, ClubMember, ClubPost, InvitePolicy, Profile, Round } from '@/lib/database.types';
+
+const INVITE_POLICIES: { value: InvitePolicy; label: string; sub: string }[] = [
+  { value: 'any_member', label: 'All club members', sub: 'All members can bring people in' },
+  { value: 'officers',   label: 'Managed', sub: 'Only you or specific members can invite' },
+];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -60,7 +67,7 @@ function fmtRoundDate(iso: string): string {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function VideoBanner({ source, style }: { source: number; style: object }) {
+function VideoBanner({ source, style }: { source: string; style: object }) {
   const player = useVideoPlayer(source, (p) => { p.loop = true; p.muted = true; p.play(); });
   return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
 }
@@ -102,7 +109,7 @@ export default function ClubScreen() {
   const { session } = useAuth();
 
   const [club, setClub] = useState<Club | null>(null);
-  const [posts, setPosts] = useState<ClubPost[]>([]);
+  const [lastMessage, setLastMessage] = useState<ClubPost | null>(null);
   const [rounds, setRounds] = useState<Round[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -114,20 +121,17 @@ export default function ClubScreen() {
   const [showBannerPicker, setShowBannerPicker] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  const [postText, setPostText] = useState('');
-  const [posting, setPosting] = useState(false);
-
   const userId = session?.user.id ?? (__DEV__ ? '46bae3d3-2c18-450e-b267-f36b91a94a31' : null);
 
   async function reload() {
     if (!id) return;
-    const [c, p, r] = await Promise.all([
+    const [c, msgs, r] = await Promise.all([
       getClubWithMembers(id),
-      getClubPosts(id),
+      getClubMessages(id, 1),
       getClubRounds(id),
     ]);
     setClub(c);
-    setPosts(p);
+    setLastMessage(msgs[msgs.length - 1] ?? null);
     setRounds(r);
     setLoading(false);
   }
@@ -153,18 +157,7 @@ export default function ClubScreen() {
     reload();
   }
 
-  async function handlePost() {
-    if (!id || !userId || !postText.trim()) return;
-    setPosting(true);
-    const post = await addClubPost(id, userId, postText.trim());
-    if (post) {
-      setPosts((prev) => [post, ...prev]);
-      setPostText('');
-    }
-    setPosting(false);
-  }
-
-  async function handleBannerSelect(source: number, isVideo: boolean) {
+  async function handleBannerSelect(source: string, isVideo: boolean) {
     if (!id) return;
     const allCovers = [...PRESET_IMAGES, ...PRESET_GIFS];
     const matched = allCovers.find((i) => i.source === source);
@@ -172,6 +165,14 @@ export default function ClubScreen() {
     const updates = { banner_image_id: matched.id, banner_is_video: isVideo };
     setClub((prev) => prev ? { ...prev, ...updates } : prev);
     await patchClub(id, updates);
+  }
+
+  async function handleShareInviteLink() {
+    if (!id || !userId) return;
+    const invite = await createClubInvite(id, userId);
+    if (!invite) { Alert.alert('Error', 'Could not create invite link.'); return; }
+    const url = `https://countryclub.golf/join/${invite.code}`;
+    Share.share({ message: `Join ${club?.name ?? 'my club'} on Country Club:\n${url}` });
   }
 
   async function handleToggleHostOnly(val: boolean) {
@@ -208,15 +209,22 @@ export default function ClubScreen() {
               <Text style={s.backBtn}>← Back</Text>
             </TouchableOpacity>
           }
-          right={isCreator ? (
-            <TouchableOpacity onPress={() => setShowSettings(true)} activeOpacity={0.7}>
-              <Text style={s.settingsBtn}>⚙ Settings</Text>
-            </TouchableOpacity>
-          ) : undefined}
+          right={
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+              <TouchableOpacity onPress={() => router.push(`/club-chat/${club.id}` as any)} activeOpacity={0.7}>
+                <AppIcon name="ellipsis.message.fill" size={23} tintColor={Colors.cream} />
+              </TouchableOpacity>
+              {isCreator && (
+                <TouchableOpacity onPress={() => setShowSettings(true)} activeOpacity={0.7}>
+                  <Text style={s.settingsBtn}>⚙ Settings</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          }
         />
       </SafeAreaView>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + Spacing.xxl }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1 }}>
 
         {/* ── Banner ── */}
         <TouchableOpacity
@@ -239,7 +247,7 @@ export default function ClubScreen() {
         </TouchableOpacity>
 
         {/* ── Drawer ── */}
-        <View style={s.drawer}>
+        <View style={[s.drawer, { flex: 1, paddingBottom: insets.bottom + 80 }]}>
           <View style={s.handle} />
 
           {/* Create round */}
@@ -256,7 +264,7 @@ export default function ClubScreen() {
           {/* ── Upcoming rounds ── */}
           {rounds.length > 0 && (
             <>
-              <Text style={s.sectionLabel}>Upcoming Rounds</Text>
+              <Text style={[s.sectionLabel, { marginBottom: 12 }]}>Upcoming Rounds</Text>
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -274,69 +282,40 @@ export default function ClubScreen() {
             </>
           )}
 
-          {/* ── Activity feed ── */}
-          <View style={s.sectionRow}>
-            <Text style={s.sectionLabel}>Activity</Text>
-          </View>
-
-          <View style={s.card}>
-            {/* Post input */}
-            <View style={s.postInputRow}>
-              <TextInput
-                style={s.postInput}
-                value={postText}
-                onChangeText={setPostText}
-                placeholder="Write something..."
-                placeholderTextColor={Colors.muted}
-                maxLength={500}
-                multiline
-              />
-              <TouchableOpacity
-                style={[s.postBtn, (!postText.trim() || posting) && s.postBtnDim]}
-                activeOpacity={0.8}
-                onPress={handlePost}
-                disabled={!postText.trim() || posting}
-              >
-                <Text style={s.postBtnText}>{posting ? '...' : 'Post'}</Text>
-              </TouchableOpacity>
-            </View>
-
-            {posts.length === 0 ? (
-              <View style={s.emptyFeed}>
-                <Text style={s.emptyFeedText}>No activity yet. Be the first to post.</Text>
+          {/* ── Chat ── */}
+          <Text style={[s.sectionLabel, { marginTop: 24, marginBottom: 10 }]}>Chat</Text>
+          <TouchableOpacity
+            style={s.chatCard}
+            activeOpacity={0.85}
+            onPress={() => router.push(`/club-chat/${club.id}` as any)}
+          >
+            <View style={s.chatCardLeft}>
+              <Text style={s.chatIcon}>💬</Text>
+              <View style={s.chatCardBody}>
+                <Text style={s.chatCardTitle}>Club Chat</Text>
+                {lastMessage ? (
+                  <Text style={s.chatCardPreview} numberOfLines={1}>
+                    {lastMessage.profile?.name?.split(' ')[0] ?? 'Member'}: {lastMessage.body}
+                  </Text>
+                ) : (
+                  <Text style={s.chatCardPreview}>No messages yet</Text>
+                )}
               </View>
-            ) : (
-              posts.map((post, i) => {
-                const p = post.profile;
-                return (
-                  <View key={post.id} style={[s.postRow, i < posts.length - 1 && s.postRowBorder]}>
-                    <Avatar
-                      initials={p?.initials ?? '?'}
-                      bg={p?.avatar_color ?? Colors.green}
-                      textColor={p?.avatar_text_color ?? Colors.cream}
-                      size={32}
-                      borderWidth={0}
-                      borderColor="transparent"
-                    />
-                    <View style={s.postContent}>
-                      <View style={s.postMeta}>
-                        <Text style={s.postAuthor}>{p?.name ?? 'Member'}</Text>
-                        <Text style={s.postTime}>{relTime(post.created_at)}</Text>
-                      </View>
-                      <Text style={s.postBody}>{post.body}</Text>
-                    </View>
-                  </View>
-                );
-              })
-            )}
-          </View>
+            </View>
+            <Text style={s.chatArrow}>›</Text>
+          </TouchableOpacity>
 
           {/* ── Members ── */}
           <View style={[s.sectionRow, { marginTop: 24 }]}>
             <Text style={s.sectionLabel}>Members · {members.length}</Text>
-            <TouchableOpacity onPress={openAddSheet} activeOpacity={0.7} style={s.addBtn}>
-              <Text style={s.addBtnText}>+ Invite</Text>
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity onPress={handleShareInviteLink} activeOpacity={0.7} style={s.addBtn}>
+                <Text style={s.addBtnText}>Share link</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={openAddSheet} activeOpacity={0.7} style={s.addBtn}>
+                <Text style={s.addBtnText}>+ Add</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           <View style={s.card}>
@@ -438,6 +417,30 @@ export default function ClubScreen() {
                 thumbColor="#fff"
               />
             </View>
+
+            <View style={s.settingDivider} />
+            <Text style={s.settingGroupLabel}>Who can invite</Text>
+            {INVITE_POLICIES.map((p) => (
+              <TouchableOpacity
+                key={p.value}
+                style={[s.policyRow, club.invite_policy === p.value && s.policyRowActive]}
+                onPress={async () => {
+                  setClub((prev) => prev ? { ...prev, invite_policy: p.value } : prev);
+                  await patchClub(id, { invite_policy: p.value });
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={s.policyRadio}>
+                  {club.invite_policy === p.value && <View style={s.policyRadioDot} />}
+                </View>
+                <View style={{ flex: 1, gap: 1 }}>
+                  <Text style={[s.policyLabel, club.invite_policy === p.value && s.policyLabelActive]}>
+                    {p.label}
+                  </Text>
+                  <Text style={s.policySub}>{p.sub}</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
           </View>
         </View>
       </Modal>
@@ -484,7 +487,6 @@ const s = StyleSheet.create({
     marginTop: -12,
     paddingTop: 22,
     paddingHorizontal: 16,
-    minHeight: 400,
   },
   handle: { width: 32, height: 3, backgroundColor: '#d8d4c0', borderRadius: 4, alignSelf: 'center', marginBottom: 20 },
 
@@ -497,37 +499,22 @@ const s = StyleSheet.create({
     textTransform: 'uppercase', letterSpacing: 1.2,
   },
 
-  roundsStrip: { gap: 10, paddingBottom: 20 },
+  roundsStrip: { gap: 10, paddingBottom: 4 },
 
   card: { backgroundColor: Colors.card, borderRadius: 14, borderWidth: 0.5, borderColor: Colors.border },
 
-  // Activity feed
-  postInputRow: {
-    flexDirection: 'row', alignItems: 'flex-end', gap: 8,
-    paddingHorizontal: 14, paddingTop: 12, paddingBottom: 10,
-    borderBottomWidth: 0.5, borderBottomColor: Colors.border,
+  // Chat card
+  chatCard: {
+    backgroundColor: Colors.card, borderRadius: 14, borderWidth: 0.5, borderColor: Colors.border,
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14,
+    marginBottom: 0,
   },
-  postInput: {
-    flex: 1, fontFamily: Fonts.sans, fontSize: 14, color: Colors.text,
-    maxHeight: 80, minHeight: 36,
-  },
-  postBtn: {
-    backgroundColor: Colors.green, borderRadius: 10,
-    paddingHorizontal: 14, paddingVertical: 8,
-  },
-  postBtnDim: { opacity: 0.4 },
-  postBtnText: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.cream },
-
-  emptyFeed: { padding: 24, alignItems: 'center' },
-  emptyFeedText: { fontFamily: Fonts.sans, fontSize: 13, color: Colors.muted, textAlign: 'center' },
-
-  postRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
-  postRowBorder: { borderBottomWidth: 0.5, borderBottomColor: Colors.border },
-  postContent: { flex: 1, gap: 3 },
-  postMeta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  postAuthor: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.text },
-  postTime: { fontFamily: Fonts.sans, fontSize: 11, color: Colors.muted },
-  postBody: { fontFamily: Fonts.sans, fontSize: 14, color: Colors.text, lineHeight: 20 },
+  chatCardLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  chatIcon: { fontSize: 22 },
+  chatCardBody: { flex: 1, gap: 2 },
+  chatCardTitle: { fontFamily: Fonts.sansMedium, fontSize: 15, color: Colors.text },
+  chatCardPreview: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted },
+  chatArrow: { fontFamily: Fonts.sans, fontSize: 20, color: Colors.muted, marginLeft: 8 },
 
   // Members
   addBtn: { backgroundColor: Colors.creamLight, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
@@ -564,4 +551,24 @@ const s = StyleSheet.create({
   settingLeft: { flex: 1, gap: 3 },
   settingLabel: { fontFamily: Fonts.sansMedium, fontSize: 15, color: Colors.text },
   settingDesc: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted, lineHeight: 17 },
+  settingDivider: { height: 1, backgroundColor: Colors.border, marginHorizontal: 18, marginVertical: 4 },
+  settingGroupLabel: {
+    fontFamily: Fonts.sansSemiBold, fontSize: 10, color: Colors.muted,
+    textTransform: 'uppercase', letterSpacing: 1.2,
+    paddingHorizontal: 18, paddingTop: 12, paddingBottom: 6,
+  },
+  policyRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 10, paddingHorizontal: 18, borderRadius: 10,
+  },
+  policyRowActive: { backgroundColor: Colors.creamLight },
+  policyRadio: {
+    width: 18, height: 18, borderRadius: 9,
+    borderWidth: 1.5, borderColor: Colors.green,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  policyRadioDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: Colors.green },
+  policyLabel: { fontFamily: Fonts.sansMedium, fontSize: 14, color: Colors.muted },
+  policyLabelActive: { color: Colors.text },
+  policySub: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted, lineHeight: 16 },
 });

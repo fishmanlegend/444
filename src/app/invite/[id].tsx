@@ -23,13 +23,14 @@ type RoundWithPlayers = Round & { players: RoundPlayer[] };
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const FORMAT_LABEL: Record<string, string> = {
-  stroke: 'Stroke play', skins: 'Skins', stableford: 'Stableford', match: 'Match play',
+  stroke: 'Stroke play', skins: 'Skins', stableford: 'Stableford', match: 'Match play', best_ball: 'Best ball',
 };
 
 function scorecardRoute(round: Round): string {
   if (round.format === 'skins') return `/skins/${round.id}`;
   if (round.format === 'stableford') return `/stableford/${round.id}`;
   if (round.format === 'match') return `/match/${round.id}`;
+  if (round.format === 'best_ball') return `/best-ball/${round.id}`;
   return `/scorecard/${round.id}`;
 }
 
@@ -228,7 +229,7 @@ export default function InviteScreen() {
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={insets.top + 44}
       >
         <ScrollView

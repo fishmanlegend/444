@@ -5,17 +5,20 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Fonts, Spacing } from '@/constants/theme';
-import { getRoundWithPlayers, getHoles } from '@/lib/db';
+import { useAuth } from '@/context/auth';
+import { getRoundWithPlayers, getHoles, getScores, getTempScores, upsertScore, upsertTempScore } from '@/lib/db';
+import { EditPlayersSheet } from '@/components/EditPlayersSheet';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Player = { id: string; name: string; initials: string; color: string };
+type Player = { id: string; name: string; initials: string; color: string; isTempPlayer: boolean };
 
 const DEFAULT_PARS_18 = [4, 4, 3, 4, 5, 3, 4, 5, 4, 4, 3, 4, 5, 4, 3, 5, 4, 4];
 
@@ -100,14 +103,18 @@ function PtsBadge({ pts }: { pts: number | null }) {
 
 // ─── Hole card ────────────────────────────────────────────────────────────────
 
-function HoleCard({ holeIdx, scores, players, pars, onScoreChange }: {
+function HoleCard({ holeIdx, scores, players, pars, myPlayerIdx, trackOthers, onScoreChange, onToggleTrackOthers }: {
   holeIdx: number;
   scores: (number | null)[];
   players: Player[];
   pars: number[];
+  myPlayerIdx: number;
+  trackOthers: boolean;
   onScoreChange: (playerIdx: number, score: number | null) => void;
+  onToggleTrackOthers: () => void;
 }) {
   const par = pars[holeIdx] ?? 4;
+  const hasOthers = players.length > 1;
   return (
     <View style={g.holeCard}>
       <View style={g.parBanner}>
@@ -119,36 +126,49 @@ function HoleCard({ holeIdx, scores, players, pars, onScoreChange }: {
       {players.map((player, pi) => {
         const score = scores[pi] ?? null;
         const pts = stablefordPts(score, par);
+        const canEdit = pi === myPlayerIdx || trackOthers;
         return (
           <View key={player.id} style={g.scoreRow}>
             <Pip player={player} />
             <Text style={g.scorePlayerName}>{player.name}</Text>
-            <View style={g.stepper}>
-              <TouchableOpacity
-                style={g.stepBtn}
-                activeOpacity={0.7}
-                onPress={() => {
-                  if (score == null) return;
-                  onScoreChange(pi, score <= 1 ? null : score - 1);
-                }}
-              >
-                <Text style={g.stepBtnText}>−</Text>
-              </TouchableOpacity>
-              <Text style={[g.stepValue, score == null && g.stepValueDim]}>
-                {score ?? '—'}
-              </Text>
-              <TouchableOpacity
-                style={g.stepBtn}
-                activeOpacity={0.7}
-                onPress={() => onScoreChange(pi, (score ?? 0) + 1)}
-              >
-                <Text style={g.stepBtnText}>+</Text>
-              </TouchableOpacity>
-            </View>
+            {canEdit ? (
+              <View style={g.stepper}>
+                <TouchableOpacity
+                  style={g.stepBtn}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    if (score == null) return;
+                    onScoreChange(pi, score <= 1 ? null : score - 1);
+                  }}
+                >
+                  <Text style={g.stepBtnText}>−</Text>
+                </TouchableOpacity>
+                <Text style={[g.stepValue, score == null && g.stepValueDim]}>
+                  {score ?? '—'}
+                </Text>
+                <TouchableOpacity
+                  style={g.stepBtn}
+                  activeOpacity={0.7}
+                  onPress={() => onScoreChange(pi, (score ?? 0) + 1)}
+                >
+                  <Text style={g.stepBtnText}>+</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <Text style={[g.stepValue, score == null && g.stepValueDim]}>{score ?? '—'}</Text>
+            )}
             <PtsBadge pts={pts} />
           </View>
         );
       })}
+
+      {hasOthers && (
+        <TouchableOpacity onPress={onToggleTrackOthers} activeOpacity={0.7} style={g.trackToggle}>
+          <Text style={g.trackToggleText}>
+            {trackOthers ? 'Done tracking others ▾' : 'Track for others ▴'}
+          </Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -193,12 +213,15 @@ function StandingsCard({ scores, players, pars }: {
 // ─── Playing phase ────────────────────────────────────────────────────────────
 
 function PlayingPhase({
-  scores, players, pars, viewingHole, totalHoles,
-  onScoreChange, onNavigate, onEndRound, onBack,
+  scores, players, pars, myPlayerIdx, trackOthers, onToggleTrackOthers,
+  viewingHole, totalHoles, onScoreChange, onNavigate, onEndRound, onBack,
 }: {
   scores: (number | null)[][];
   players: Player[];
   pars: number[];
+  myPlayerIdx: number;
+  trackOthers: boolean;
+  onToggleTrackOthers: () => void;
   viewingHole: number;
   totalHoles: number;
   onScoreChange: (holeIdx: number, playerIdx: number, score: number | null) => void;
@@ -261,6 +284,9 @@ function PlayingPhase({
           scores={scores[viewingHole]}
           players={players}
           pars={pars}
+          myPlayerIdx={myPlayerIdx}
+          trackOthers={trackOthers}
+          onToggleTrackOthers={onToggleTrackOthers}
           onScoreChange={(pi, score) => onScoreChange(viewingHole, pi, score)}
         />
 
@@ -369,41 +395,111 @@ function ResultsPhase({
 export default function StablefordScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { session } = useAuth();
+  const userId = session?.user.id ?? (__DEV__ ? '46bae3d3-2c18-450e-b267-f36b91a94a31' : null);
 
   const [players, setPlayers] = useState<Player[]>([]);
+  const [myPlayerIdx, setMyPlayerIdx] = useState(0);
+  const [trackOthers, setTrackOthers] = useState(false);
   const [pars, setPars] = useState<number[]>(DEFAULT_PARS_18);
+  const [dbPars, setDbPars] = useState<number[]>([]);
   const [totalHoles, setTotalHoles] = useState(18);
+  const [holeMode, setHoleMode] = useState<'9' | '18' | '36' | 'custom'>('18');
+  const [customText, setCustomText] = useState('');
   const [loading, setLoading] = useState(true);
   const [scores, setScores] = useState<(number | null)[][]>([]);
   const [viewingHole, setViewingHole] = useState(0);
-  const [phase, setPhase] = useState<'playing' | 'results'>('playing');
+  const [phase, setPhase] = useState<'setup' | 'playing' | 'results'>('setup');
+  const [hostId, setHostId] = useState('');
+  const [showEditSheet, setShowEditSheet] = useState(false);
+
+  function buildPlayerList(rawPlayers: any[]): Player[] {
+    return rawPlayers
+      .filter((p) => p.rsvp === 'in' || p.temp_player_id != null)
+      .map((p) => {
+        if (p.temp_player_id) {
+          const tp = p.temp_player;
+          const name = tp?.name ?? 'Guest';
+          const initials = name.split(/\s+/).map((w: string) => w[0]?.toUpperCase() ?? '').slice(0, 2).join('') || '?';
+          return { id: tp?.id ?? p.temp_player_id, name, initials, color: '#7a7060', isTempPlayer: true };
+        }
+        return {
+          id: p.player_id,
+          name: p.profile?.name ?? 'Player',
+          initials: p.profile?.initials ?? '?',
+          color: p.profile?.avatar_color ?? Colors.green,
+          isTempPlayer: false,
+        };
+      });
+  }
 
   useEffect(() => {
     if (!id) { setLoading(false); return; }
     Promise.all([getRoundWithPlayers(id), getHoles(id)]).then(([round, holes]) => {
       if (round) {
-        const mapped: Player[] = (round.players as any[])
-          .filter((p) => p.rsvp === 'in')
-          .map((p) => ({
-            id: p.player_id,
-            name: p.profile?.name ?? 'Player',
-            initials: p.profile?.initials ?? '?',
-            color: p.profile?.avatar_color ?? Colors.green,
-          }));
+        const mapped = buildPlayerList(round.players as any[]);
         setPlayers(mapped);
-        const nh = round.total_holes ?? 18;
-        setTotalHoles(nh);
+        const idx = mapped.findIndex((p) => p.id === userId);
+        setMyPlayerIdx(Math.max(0, idx));
+        setHostId(round.host_id);
 
-        const holePars = holes.length > 0
+        const loaded = holes.length > 0
           ? holes.sort((a, b) => a.hole_number - b.hole_number).map((h) => h.par)
-          : nh === 18 ? DEFAULT_PARS_18 : Array(nh).fill(4);
-        setPars(holePars);
-
-        setScores(Array.from({ length: nh }, () => Array(mapped.length).fill(null)));
+          : [];
+        setDbPars(loaded);
       }
       setLoading(false);
     });
   }, [id]);
+
+  async function reloadPlayers() {
+    if (!id) return;
+    const round = await getRoundWithPlayers(id);
+    if (round) {
+      const mapped = buildPlayerList(round.players as any[]);
+      setPlayers(mapped);
+      const idx = mapped.findIndex((p) => p.id === userId);
+      setMyPlayerIdx(Math.max(0, idx));
+    }
+  }
+
+  function selectHoleMode(mode: '9' | '18' | '36' | 'custom') {
+    setHoleMode(mode);
+    if (mode === '9') setTotalHoles(9);
+    else if (mode === '18') setTotalHoles(18);
+    else if (mode === '36') setTotalHoles(36);
+  }
+
+  function handleCustomChange(text: string) {
+    setCustomText(text);
+    const n = parseInt(text, 10);
+    if (!isNaN(n) && n > 0) setTotalHoles(n);
+  }
+
+  async function startGame() {
+    const holePars = dbPars.length > 0
+      ? dbPars.slice(0, totalHoles)
+      : totalHoles === 18 ? DEFAULT_PARS_18 : Array(totalHoles).fill(4);
+    setPars(holePars);
+
+    const initScores: (number | null)[][] = Array.from({ length: totalHoles }, () => Array(players.length).fill(null));
+    if (id) {
+      const [dbScores, dbTempScores] = await Promise.all([getScores(id), getTempScores(id)]);
+      for (const s of dbScores) {
+        const pi = players.findIndex((p) => p.id === s.player_id);
+        const hi = s.hole_number - 1;
+        if (pi >= 0 && hi >= 0 && hi < totalHoles) initScores[hi][pi] = s.strokes;
+      }
+      for (const s of dbTempScores) {
+        const pi = players.findIndex((p) => p.id === s.temp_player_id);
+        const hi = s.hole_number - 1;
+        if (pi >= 0 && hi >= 0 && hi < totalHoles) initScores[hi][pi] = s.strokes;
+      }
+    }
+    setScores(initScores);
+    setViewingHole(0);
+    setPhase('playing');
+  }
 
   function handleScoreChange(holeIdx: number, playerIdx: number, score: number | null) {
     setScores((prev) => {
@@ -411,6 +507,13 @@ export default function StablefordScreen() {
       next[holeIdx][playerIdx] = score;
       return next;
     });
+    const player = players[playerIdx];
+    if (!player) return;
+    if (player.isTempPlayer) {
+      upsertTempScore(id, player.id, holeIdx + 1, score);
+    } else {
+      upsertScore(id, player.id, holeIdx + 1, score, userId ?? undefined);
+    }
   }
 
   if (loading) {
@@ -421,6 +524,90 @@ export default function StablefordScreen() {
     );
   }
 
+  if (phase === 'setup') {
+    return (
+      <>
+      <View style={g.root}>
+        <SafeAreaView edges={['top']} style={{ backgroundColor: Colors.green }}>
+          <View style={g.topBar}>
+            <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')} activeOpacity={0.7} style={g.topBarBackHit}>
+              <Text style={g.topBarBack}>← Back</Text>
+            </TouchableOpacity>
+            <Text style={g.topBarTitle}>Stableford</Text>
+          </View>
+        </SafeAreaView>
+        <ScrollView contentContainerStyle={[g.settleContent, { paddingBottom: 40 }]}>
+          <Text style={g.setupHeading}>Set up the game</Text>
+
+          <View style={g.fieldCard}>
+            <Text style={g.fieldLabel}>Holes</Text>
+            <View style={su.segRow}>
+              {(['9', '18', '36', 'custom'] as const).map((mode) => (
+                <TouchableOpacity
+                  key={mode}
+                  style={[su.seg, holeMode === mode && su.segActive]}
+                  onPress={() => selectHoleMode(mode)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[su.segText, holeMode === mode && su.segTextActive]}>
+                    {mode === 'custom' ? 'Custom' : mode}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {holeMode === 'custom' && (
+              <TextInput
+                style={su.customInput}
+                value={customText}
+                onChangeText={handleCustomChange}
+                keyboardType="number-pad"
+                placeholder="# of holes"
+                placeholderTextColor={Colors.muted}
+                maxLength={3}
+                autoFocus
+              />
+            )}
+          </View>
+
+          <View style={g.fieldCard}>
+            <View style={g.cardLabelRow}>
+              <Text style={g.fieldLabel}>Players</Text>
+              <TouchableOpacity onPress={() => setShowEditSheet(true)} activeOpacity={0.7}>
+                <Text style={g.editLink}>Edit</Text>
+              </TouchableOpacity>
+            </View>
+            {players.map((p) => (
+              <View key={p.id} style={g.setupPlayerRow}>
+                <Pip player={p} />
+                <Text style={g.setupPlayerName}>{p.name}</Text>
+                {p.isTempPlayer && <Text style={g.guestBadge}>Guest</Text>}
+              </View>
+            ))}
+          </View>
+
+          <View style={g.setupNote}>
+            <Text style={g.setupNoteText}>
+              Stableford · {totalHoles} holes · {players.length} players
+            </Text>
+          </View>
+
+          <TouchableOpacity style={g.primaryBtn} onPress={startGame} activeOpacity={0.85}>
+            <Text style={g.primaryBtnText}>Start</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+      <EditPlayersSheet
+        roundId={id ?? ''}
+        hostId={hostId}
+        visible={showEditSheet}
+        currentUserId={userId}
+        onClose={() => setShowEditSheet(false)}
+        onDone={reloadPlayers}
+      />
+      </>
+    );
+  }
+
   if (phase === 'results') {
     return (
       <ResultsPhase
@@ -428,7 +615,7 @@ export default function StablefordScreen() {
         players={players}
         pars={pars}
         totalHoles={totalHoles}
-        onDone={() => router.back()}
+        onDone={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}
       />
     );
   }
@@ -438,12 +625,15 @@ export default function StablefordScreen() {
       scores={scores}
       players={players}
       pars={pars}
+      myPlayerIdx={myPlayerIdx}
+      trackOthers={trackOthers}
+      onToggleTrackOthers={() => setTrackOthers((v) => !v)}
       viewingHole={viewingHole}
       totalHoles={totalHoles}
       onScoreChange={handleScoreChange}
       onNavigate={setViewingHole}
       onEndRound={() => setPhase('results')}
-      onBack={() => router.back()}
+      onBack={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}
     />
   );
 }
@@ -482,6 +672,17 @@ const g = StyleSheet.create({
   settleContent: { backgroundColor: Colors.bg, padding: Spacing.lg, gap: 12 },
   settleSubhead: { fontFamily: Fonts.sans, fontSize: 13, color: Colors.muted, marginBottom: 4 },
 
+  // Setup phase
+  setupHeading: { fontFamily: Fonts.serifMedium, fontSize: 24, color: Colors.text, marginBottom: 20, marginTop: 4 },
+  fieldLabel: { fontFamily: Fonts.sans, fontSize: 13, color: Colors.muted },
+  cardLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  editLink: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.green },
+  setupPlayerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4 },
+  setupPlayerName: { fontFamily: Fonts.sans, fontSize: 14, color: Colors.text, flex: 1 },
+  guestBadge: { fontFamily: Fonts.sans, fontSize: 11, color: Colors.muted },
+  setupNote: { paddingVertical: 10, alignItems: 'center' },
+  setupNoteText: { fontFamily: Fonts.sans, fontSize: 13, color: Colors.muted },
+
   // Pip
   pip: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   pipText: { fontFamily: Fonts.sansSemiBold, fontSize: 11, color: '#fff' },
@@ -516,6 +717,9 @@ const g = StyleSheet.create({
   stepBtnText:  { fontFamily: Fonts.sansSemiBold, fontSize: 16, color: Colors.green, lineHeight: 19 },
   stepValue:    { fontFamily: Fonts.sansSemiBold, fontSize: 16, color: Colors.text, minWidth: 24, textAlign: 'center' },
   stepValueDim: { color: Colors.muted },
+
+  trackToggle: { paddingVertical: 11, alignItems: 'center', borderTopWidth: 0.5, borderTopColor: Colors.border },
+  trackToggleText: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted },
 
   // Points badge
   ptsBadge:     { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, minWidth: 46, alignItems: 'center' },
@@ -570,6 +774,19 @@ const g = StyleSheet.create({
   resultPts:    { fontFamily: Fonts.sansSemiBold, fontSize: 15, color: Colors.text },
   resultVs:     { fontFamily: Fonts.sans, fontSize: 11 },
 
-  primaryBtn:     { backgroundColor: Colors.green, borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginTop: 8 },
-  primaryBtnText: { fontFamily: Fonts.sansSemiBold, fontSize: 15, color: Colors.cream },
+  primaryBtn:     { backgroundColor: Colors.green, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 8 },
+  primaryBtnText: { fontFamily: Fonts.sansSemiBold, fontSize: 16, color: Colors.cream },
+});
+
+const su = StyleSheet.create({
+  segRow:      { flexDirection: 'row', gap: 8 },
+  seg:         { flex: 1, paddingVertical: 8, borderRadius: 10, backgroundColor: Colors.creamLight, alignItems: 'center' },
+  segActive:   { backgroundColor: Colors.green },
+  segText:     { fontFamily: Fonts.sansMedium, fontSize: 14, color: Colors.text },
+  segTextActive: { color: Colors.cream },
+  customInput: {
+    fontFamily: Fonts.sansSemiBold, fontSize: 20, color: Colors.text,
+    backgroundColor: Colors.creamLight, borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 10, textAlign: 'center',
+  },
 });

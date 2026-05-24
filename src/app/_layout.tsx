@@ -45,6 +45,8 @@ function RootNavigator() {
       <Stack.Screen name="auth/index" />
       <Stack.Screen name="auth/verify" />
       <Stack.Screen name="create"          options={{ presentation: 'modal' }} />
+      <Stack.Screen name="location-search" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="poll-setup"      options={{ presentation: 'modal' }} />
       <Stack.Screen name="invite/[id]" />
       <Stack.Screen name="manage/[id]" />
       <Stack.Screen name="event/[id]" />

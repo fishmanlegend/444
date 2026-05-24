@@ -1,28 +1,15 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Image, StyleSheet } from 'react-native';
 
-import { Colors } from '@/constants/theme';
+const WORDMARK = require('../../assets/images/wordmark.png');
 
 export function Wordmark({ size = 26 }: { size?: number }) {
-  const dotSize = Math.round(size * 0.28);
-  return (
-    <View style={s.row}>
-      <Text style={[s.text, { fontSize: size, lineHeight: size * 1.15, letterSpacing: size * 0.135 }]}>CC</Text>
-      <View style={[s.dot, { width: dotSize, height: dotSize, borderRadius: dotSize / 2, marginLeft: size * 0.20, marginBottom: size * 0.46 }]} />
-    </View>
-  );
+  // PNG is 588×119 ≈ 4.94:1
+  const height = size * 1.68;
+  const width = height * (588 / 119);
+  return <Image source={WORDMARK} style={[s.img, { width, height }]} resizeMode="contain" />;
 }
 
 const s = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-  },
-  text: {
-    fontFamily: 'Georgia',
-    color: Colors.cream,
-  },
-  dot: {
-    backgroundColor: '#6b7f65',
-  },
+  img: {},
 });
