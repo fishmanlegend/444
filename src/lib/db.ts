@@ -193,7 +193,7 @@ export async function createRound(params: {
     .from('rounds')
     .insert({
       host_id: params.hostId,
-      ...(params.clubId ? { club_id: params.clubId } : {}),
+      club_id: params.clubId ?? null,
       title: params.title,
       course_name: params.courseName,
       format: params.format,
@@ -207,6 +207,7 @@ export async function createRound(params: {
       poll_guests: params.pollGuests,
       total_holes: params.totalHoles,
       starting_hole: params.startingHole,
+      format_config: {},
       status: 'upcoming',
       completed_at: null,
     })
@@ -218,22 +219,32 @@ export async function createRound(params: {
     return null;
   }
 
-  // Insert holes
+  // Insert holes — roll back the round if this fails
   const holes: Hole[] = params.pars.map((par, i) => ({
     round_id: round.id,
     hole_number: i + 1,
     par,
     yardage: params.yardages?.[i] ?? null,
   }));
-  await supabase.from('holes').insert(holes as any);
+  const { error: holesError } = await supabase.from('holes').insert(holes as any);
+  if (holesError) {
+    if (__DEV__) console.error('[createRound] holes insert failed, rolling back:', holesError);
+    await supabase.from('rounds').delete().eq('id', round.id);
+    return null;
+  }
 
-  // Add host as a player
-  await supabase.from('round_players').insert({
+  // Add host as a player — roll back everything if this fails
+  const { error: playerError } = await supabase.from('round_players').insert({
     round_id: round.id,
     player_id: params.hostId,
     rsvp: 'in',
     is_host: true,
   });
+  if (playerError) {
+    if (__DEV__) console.error('[createRound] host player insert failed, rolling back:', playerError);
+    await supabase.from('rounds').delete().eq('id', round.id);
+    return null;
+  }
 
   // Increment host's rounds_hosted stat
   await incrementStat(params.hostId, 'rounds_hosted');
@@ -537,6 +548,23 @@ export async function addRoundComment(roundId: string, userId: string, body: str
   return supabase.from('round_comments').insert({ round_id: roundId, user_id: userId, body: body.trim() });
 }
 
+// ─── Poll votes ───────────────────────────────────────────────────────────────
+
+export async function getPollVotes(roundId: string) {
+  const { data } = await supabase
+    .from('poll_votes')
+    .select('*')
+    .eq('round_id', roundId);
+  return data ?? [];
+}
+
+export async function upsertPollVote(roundId: string, voterId: string, optionIndex: number) {
+  return supabase.from('poll_votes').upsert(
+    { round_id: roundId, voter_id: voterId, option_index: optionIndex },
+    { onConflict: 'round_id,voter_id' },
+  );
+}
+
 // ─── Pals ─────────────────────────────────────────────────────────────────────
 
 export async function getPals(userId: string): Promise<(Pal & { profile: Profile })[]> {
@@ -746,6 +774,61 @@ export async function upsertMatchHole(roundId: string, holeNumber: number, resul
     return supabase.from('match_holes').delete().eq('round_id', roundId).eq('hole_number', holeNumber);
   }
   return supabase.from('match_holes').upsert({ round_id: roundId, hole_number: holeNumber, result });
+}
+
+// ─── Nassau ───────────────────────────────────────────────────────────────────
+
+export async function getNassauBets(roundId: string) {
+  const { data } = await supabase.from('nassau_bets').select('*').eq('round_id', roundId).order('start_hole');
+  return (data ?? []) as import('./database.types').NassauBet[];
+}
+
+export async function insertNassauBet(bet: Omit<import('./database.types').NassauBet, 'id'>) {
+  const { data } = await supabase.from('nassau_bets').insert(bet).select().single();
+  return data as import('./database.types').NassauBet | null;
+}
+
+export async function getNassauHoles(roundId: string) {
+  const { data } = await supabase.from('nassau_holes').select('*').eq('round_id', roundId);
+  return (data ?? []) as import('./database.types').NassauHole[];
+}
+
+export async function upsertNassauHole(roundId: string, betId: string, holeNumber: number, result: 'a' | 'b' | 'halve' | null) {
+  if (result === null) {
+    return supabase.from('nassau_holes').delete().eq('bet_id', betId).eq('hole_number', holeNumber);
+  }
+  return supabase.from('nassau_holes').upsert({ round_id: roundId, bet_id: betId, hole_number: holeNumber, result });
+}
+
+// ─── Wolf ─────────────────────────────────────────────────────────────────────
+
+export async function getWolfHoles(roundId: string) {
+  const { data } = await supabase.from('wolf_holes').select('*').eq('round_id', roundId).order('hole_number');
+  return (data ?? []) as import('./database.types').WolfHole[];
+}
+
+export async function upsertWolfHole(hole: import('./database.types').WolfHole) {
+  return supabase.from('wolf_holes').upsert(hole as any);
+}
+
+// ─── Banker ───────────────────────────────────────────────────────────────────
+
+export async function getBankerHoles(roundId: string) {
+  const { data } = await supabase.from('banker_holes').select('*').eq('round_id', roundId).order('hole_number');
+  return (data ?? []) as import('./database.types').BankerHole[];
+}
+
+export async function upsertBankerHole(hole: import('./database.types').BankerHole) {
+  return supabase.from('banker_holes').upsert(hole as any);
+}
+
+export async function getBankerResults(roundId: string) {
+  const { data } = await supabase.from('banker_results').select('*').eq('round_id', roundId);
+  return (data ?? []) as import('./database.types').BankerResult[];
+}
+
+export async function upsertBankerResult(result: import('./database.types').BankerResult) {
+  return supabase.from('banker_results').upsert(result as any);
 }
 
 // ─── Clubs ────────────────────────────────────────────────────────────────────

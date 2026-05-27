@@ -1,4 +1,4 @@
-export type RoundFormat = 'stroke' | 'skins' | 'stableford' | 'match' | 'best_ball' | 'other';
+export type RoundFormat = 'stroke' | 'skins' | 'stableford' | 'match' | 'best_ball' | 'other' | 'nassau' | 'wolf' | 'nines' | 'snake' | 'banker';
 export type RoundStatus = 'upcoming' | 'active' | 'completed' | 'cancelled';
 export type RsvpStatus  = 'in' | 'maybe' | 'out' | 'pending';
 
@@ -66,6 +66,7 @@ export interface Round {
   status: RoundStatus;
   completed_at: string | null;
   created_at: string;
+  format_config?: Record<string, unknown>;
 }
 
 export interface Hole {
@@ -90,6 +91,7 @@ export interface TempScore {
   temp_player_id: string;
   hole_number: number;
   strokes: number | null;
+  putts?: number | null;
   recorded_at: string;
 }
 
@@ -98,6 +100,7 @@ export interface RoundPlayer {
   round_id: string;
   player_id: string | null;        // null for temp players
   temp_player_id: string | null;   // non-null for temp players
+  course_handicap?: number | null;
   rsvp: RsvpStatus;
   is_host: boolean;
   joined_at: string;
@@ -111,6 +114,7 @@ export interface Score {
   player_id: string;
   hole_number: number;
   strokes: number | null;
+  putts?: number | null;
   recorded_at: string;
 }
 
@@ -210,6 +214,53 @@ export interface ClubMember {
   profile?: Profile;
 }
 
+// ── New game mode types ────────────────────────────────────────────────────────
+
+export interface NassauBet {
+  id: string;
+  round_id: string;
+  type: 'front' | 'back' | 'total' | 'press';
+  start_hole: number;
+  end_hole: number;
+  parent_bet_id: string | null;
+}
+
+export interface NassauHole {
+  round_id: string;
+  bet_id: string;
+  hole_number: number;
+  result: 'a' | 'b' | 'halve' | null;
+}
+
+export interface WolfHole {
+  round_id: string;
+  hole_number: number;
+  wolf_player_id: string;
+  partner_player_id: string | null;
+  is_blind: boolean;
+  result: 'wolf' | 'pack' | null;
+}
+
+export interface BankerHole {
+  round_id: string;
+  hole_number: number;
+  banker_player_id: string;
+}
+
+export interface BankerResult {
+  round_id: string;
+  hole_number: number;
+  player_id: string;
+  result: 'win' | 'loss' | 'halve';
+}
+
+export interface PollVote {
+  round_id: string;
+  voter_id: string;
+  option_index: number;
+  voted_at: string;
+}
+
 // ── Supabase Database shape ────────────────────────────────────────────────────
 
 type R = Record<string, unknown>;
@@ -223,7 +274,7 @@ export type Database = {
   public: {
     Tables: {
       profiles:           { Row: Profile      & R; Insert: (Partial<Profile> & { id: string; phone: string }) & R; Update: Partial<Profile>    & R; Relationships: DbRel[] };
-      rounds:             { Row: Round        & R; Insert: Omit<Round, 'id' | 'created_at'>                  & R; Update: Partial<Round>       & R; Relationships: DbRel[] };
+      rounds:             { Row: Round        & R; Insert: Omit<Round, 'id' | 'created_at' | 'format_config'> & { format_config?: Record<string, unknown> } & R; Update: Partial<Round> & R; Relationships: DbRel[] };
       holes:              { Row: Hole         & R; Insert: Hole                                               & R; Update: Partial<Hole>        & R; Relationships: DbRel[] };
       round_players:      { Row: RoundPlayer  & R; Insert: (Omit<RoundPlayer, 'id' | 'joined_at' | 'profile' | 'temp_player' | 'player_id' | 'temp_player_id'> & { player_id?: string | null; temp_player_id?: string | null }) & R; Update: Partial<RoundPlayer> & R; Relationships: DbRel[] };
       temp_players:       { Row: TempPlayer   & R; Insert: Omit<TempPlayer, 'id' | 'created_at' | 'anonymized_at'> & R;       Update: Partial<TempPlayer>   & R; Relationships: DbRel[] };
@@ -241,6 +292,12 @@ export type Database = {
       round_comments:     { Row: RoundComment & R; Insert: Omit<RoundComment, 'id' | 'created_at' | 'profile'> & R; Update: Partial<RoundComment> & R; Relationships: DbRel[] };
       cover_image_stats:  { Row: { image_id: string; pick_count: number; updated_at: string } & R; Insert: { image_id: string; pick_count?: number } & R; Update: { pick_count?: number } & R; Relationships: DbRel[] };
       user_cover_picks:   { Row: { user_id: string; image_id: string; pick_count: number }    & R; Insert: { user_id: string; image_id: string; pick_count?: number } & R; Update: { pick_count?: number } & R; Relationships: DbRel[] };
+      poll_votes:         { Row: PollVote     & R; Insert: Omit<PollVote, 'voted_at'> & R;    Update: Partial<PollVote>    & R; Relationships: DbRel[] };
+      nassau_bets:        { Row: NassauBet    & R; Insert: Omit<NassauBet, 'id'> & R;         Update: Partial<NassauBet>   & R; Relationships: DbRel[] };
+      nassau_holes:       { Row: NassauHole   & R; Insert: NassauHole           & R;           Update: Partial<NassauHole>  & R; Relationships: DbRel[] };
+      wolf_holes:         { Row: WolfHole     & R; Insert: WolfHole             & R;           Update: Partial<WolfHole>    & R; Relationships: DbRel[] };
+      banker_holes:       { Row: BankerHole   & R; Insert: BankerHole           & R;           Update: Partial<BankerHole>  & R; Relationships: DbRel[] };
+      banker_results:     { Row: BankerResult & R; Insert: BankerResult         & R;           Update: Partial<BankerResult>& R; Relationships: DbRel[] };
     };
     Views:          { [_ in never]: never };
     Functions:      { [_ in never]: never };

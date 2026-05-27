@@ -23,6 +23,7 @@
     "expo-clipboard": "~55.0.13",
     "expo-constants": "~55.0.16",
     "expo-contacts": "~55.0.14",
+    "expo-dev-client": "~55.0.35",
     "expo-device": "~55.0.17",
     "expo-file-system": "~55.0.21",
     "expo-font": "~55.0.7",
@@ -54,6 +55,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "@types/react-native": "^0.72.8",
     "typescript": "~5.9.2"
   },
   "private": true

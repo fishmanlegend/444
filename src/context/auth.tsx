@@ -31,6 +31,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const timeout = setTimeout(() => setLoading(false), 5000);
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, s) => {
       setSession(s);
       if (s) {
@@ -41,10 +43,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       // Only clear the initial loading gate once — subsequent events
       // (TOKEN_REFRESHED, SIGNED_IN after OTP, etc.) must not retrigger it.
-      if (event === 'INITIAL_SESSION') setLoading(false);
+      if (event === 'INITIAL_SESSION') { clearTimeout(timeout); setLoading(false); }
     });
 
-    return () => subscription.unsubscribe();
+    return () => { subscription.unsubscribe(); clearTimeout(timeout); };
   }, []);
 
   async function loadProfile(userId: string) {

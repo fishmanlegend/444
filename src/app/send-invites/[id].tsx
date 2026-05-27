@@ -56,7 +56,8 @@ function ShareBtn({
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function SendInvitesScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, next } = useLocalSearchParams<{ id: string; next?: string }>();
+  const destination = next ? decodeURIComponent(next) : '/(tabs)';
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
@@ -146,7 +147,7 @@ export default function SendInvitesScreen() {
     }
 
     setSending(false);
-    router.replace('/(tabs)');
+    router.replace(destination as any);
   }
 
   async function copyLink() {
@@ -206,7 +207,7 @@ export default function SendInvitesScreen() {
       <SafeAreaView edges={['top']} style={{ backgroundColor: Colors.green }}>
         <TopBar
           right={
-            <TouchableOpacity onPress={() => router.replace('/(tabs)')} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => router.replace(destination as any)} activeOpacity={0.7}>
               <Text style={s.doneBtn}>Done</Text>
             </TouchableOpacity>
           }

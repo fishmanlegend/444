@@ -13,8 +13,8 @@ import { Colors, Fonts, Spacing } from '@/constants/theme';
 import { PRESET_IMAGES } from '@/constants/presetImages';
 import { PRESET_GIFS } from '@/constants/presetGifs';
 import { useAuth } from '@/context/auth';
-import { getRoundWithPlayers, updateRsvp, getGuestRsvps, getRoundComments, addRoundComment } from '@/lib/db';
-import type { Round, RoundPlayer, RsvpStatus, GuestRsvp, RoundComment } from '@/lib/database.types';
+import { getRoundWithPlayers, updateRsvp, getGuestRsvps, getRoundComments, addRoundComment, getPollVotes, upsertPollVote } from '@/lib/db';
+import type { Round, RoundPlayer, RsvpStatus, GuestRsvp, RoundComment, PollVote } from '@/lib/database.types';
 
 const APP_STORE_URL = 'https://apps.apple.com/app/cc-golf';
 
@@ -23,7 +23,8 @@ type RoundWithPlayers = Round & { players: RoundPlayer[] };
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const FORMAT_LABEL: Record<string, string> = {
-  stroke: 'Stroke play', skins: 'Skins', stableford: 'Stableford', match: 'Match play', best_ball: 'Best ball',
+  stroke: 'Stroke play', skins: 'Skins', stableford: 'Stableford', match: 'Match play',
+  best_ball: 'Best ball', nassau: 'Nassau', wolf: 'Wolf', nines: '9-Point', snake: 'Snake', banker: 'Banker',
 };
 
 function scorecardRoute(round: Round): string {
@@ -31,6 +32,11 @@ function scorecardRoute(round: Round): string {
   if (round.format === 'stableford') return `/stableford/${round.id}`;
   if (round.format === 'match') return `/match/${round.id}`;
   if (round.format === 'best_ball') return `/best-ball/${round.id}`;
+  if (round.format === 'nassau') return `/nassau/${round.id}`;
+  if (round.format === 'wolf') return `/wolf/${round.id}`;
+  if (round.format === 'nines') return `/nines/${round.id}`;
+  if (round.format === 'snake') return `/snake/${round.id}`;
+  if (round.format === 'banker') return `/banker/${round.id}`;
   return `/scorecard/${round.id}`;
 }
 
@@ -139,9 +145,11 @@ export default function InviteScreen() {
   const [round, setRound] = useState<RoundWithPlayers | null>(null);
   const [guests, setGuests] = useState<GuestRsvp[]>([]);
   const [comments, setComments] = useState<RoundComment[]>([]);
+  const [pollVotes, setPollVotes] = useState<PollVote[]>([]);
   const [loading, setLoading] = useState(true);
   const [commentText, setCommentText] = useState('');
   const [posting, setPosting] = useState(false);
+  const [nudging, setNudging] = useState(false);
   const [rsvp, setRsvp] = useState<RsvpStatus | null>(
     initialRsvp === 'in' || initialRsvp === 'maybe' || initialRsvp === 'out' ? initialRsvp : null
   );
@@ -149,10 +157,11 @@ export default function InviteScreen() {
 
   useEffect(() => {
     if (!id) return;
-    Promise.all([getRoundWithPlayers(id), getGuestRsvps(id), getRoundComments(id)]).then(([roundData, guestData, commentData]) => {
+    Promise.all([getRoundWithPlayers(id), getGuestRsvps(id), getRoundComments(id), getPollVotes(id)]).then(([roundData, guestData, commentData, voteData]) => {
       setRound(roundData as RoundWithPlayers | null);
       setGuests(guestData);
       setComments(commentData as RoundComment[]);
+      setPollVotes(voteData as PollVote[]);
       if (roundData && userId) {
         const me = (roundData.players as RoundPlayer[]).find((p) => p.player_id === userId);
         const myRsvp = me?.rsvp as RsvpStatus | undefined;
@@ -169,7 +178,8 @@ export default function InviteScreen() {
   }, [id, userId]);
 
   const handleRsvp = async (status: RsvpStatus) => {
-    if (!userId || !round) return;
+    if (!userId) { router.push('/auth' as any); return; }
+    if (!round) return;
     setRsvp(status);
     await updateRsvp(round.id, userId, status);
   };
@@ -183,6 +193,22 @@ export default function InviteScreen() {
     const fresh = await getRoundComments(round.id);
     setComments(fresh as RoundComment[]);
     setPosting(false);
+  };
+
+  const handleVote = async (optionIndex: number) => {
+    if (!userId || !round) return;
+    await upsertPollVote(round.id, userId, optionIndex);
+    const fresh = await getPollVotes(round.id);
+    setPollVotes(fresh as PollVote[]);
+  };
+
+  const handleNudge = async () => {
+    if (!userId || !round || nudging) return;
+    setNudging(true);
+    await addRoundComment(round.id, userId, 'wants to play again 🏌️');
+    const fresh = await getRoundComments(round.id);
+    setComments(fresh as RoundComment[]);
+    setNudging(false);
   };
 
   if (loading) {
@@ -212,6 +238,13 @@ export default function InviteScreen() {
   const spotsLeft = Math.max(0, round.spots - goingCount);
   const isWeb = Platform.OS === 'web';
   const isActive = round.status === 'active';
+  const isCompleted = round.status === 'completed';
+  const isHost = players.find((p) => p.is_host)?.player_id === userId;
+  const myVote = pollVotes.find((v) => v.voter_id === userId)?.option_index ?? null;
+  const pollOptions = (round.format_config as any)?.pollOptions as string[] | undefined;
+  const hasNudged = comments.some(
+    (c) => c.user_id === userId && c.body === 'wants to play again 🏌️'
+  );
 
   return (
     <View style={s.root}>
@@ -283,6 +316,46 @@ export default function InviteScreen() {
                 <View style={s.liveDot} />
                 <Text style={s.liveBannerText}>Game is live — open scorecard</Text>
                 <Text style={s.liveBannerArrow}>→</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* ── Poll voting ── */}
+            {round.poll_guests && pollOptions && pollOptions.length > 0 && !isCompleted && (
+              <View style={s.pollBlock}>
+                <Text style={s.pollTitle}>When works for you?</Text>
+                {pollOptions.map((opt, i) => {
+                  const count = pollVotes.filter((v) => v.option_index === i).length;
+                  const isMyVote = myVote === i;
+                  const d = new Date(opt);
+                  const label = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                  return (
+                    <TouchableOpacity
+                      key={i}
+                      style={[s.pollOption, isMyVote && s.pollOptionActive]}
+                      activeOpacity={0.7}
+                      onPress={() => handleVote(i)}
+                    >
+                      <Text style={[s.pollOptionLabel, isMyVote && s.pollOptionLabelActive]}>{label}</Text>
+                      <Text style={[s.pollOptionCount, isMyVote && s.pollOptionCountActive]}>
+                        {count} {count === 1 ? 'vote' : 'votes'}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* ── Nudge button (non-host, completed rounds) ── */}
+            {isCompleted && !isHost && userId && (
+              <TouchableOpacity
+                style={[s.nudgeBtn, (nudging || hasNudged) && s.nudgeBtnDone]}
+                activeOpacity={0.8}
+                onPress={handleNudge}
+                disabled={nudging || hasNudged}
+              >
+                <Text style={s.nudgeBtnText}>
+                  {hasNudged ? 'Nudge sent ✓' : nudging ? 'Sending...' : 'Tell the host you want to play again 🏌️'}
+                </Text>
               </TouchableOpacity>
             )}
 
@@ -558,4 +631,32 @@ const s = StyleSheet.create({
     fontFamily: Fonts.sans, fontSize: 11, color: Colors.muted,
     textAlign: 'center', paddingVertical: 20,
   },
+
+  // Poll voting
+  pollBlock: {
+    backgroundColor: Colors.card, borderRadius: 14,
+    borderWidth: 0.5, borderColor: Colors.border,
+    padding: 14, marginBottom: 16,
+  },
+  pollTitle: { fontFamily: Fonts.sansSemiBold, fontSize: 13, color: Colors.text, marginBottom: 10 },
+  pollOption: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 11, paddingHorizontal: 12,
+    borderRadius: 10, borderWidth: 1, borderColor: Colors.border,
+    marginBottom: 8, backgroundColor: Colors.bg,
+  },
+  pollOptionActive: { borderColor: Colors.green, backgroundColor: '#edf5ed' },
+  pollOptionLabel: { fontFamily: Fonts.sansMedium, fontSize: 14, color: Colors.text },
+  pollOptionLabelActive: { color: Colors.green },
+  pollOptionCount: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted },
+  pollOptionCountActive: { color: Colors.green },
+
+  // Nudge button
+  nudgeBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: Colors.green, borderRadius: 14,
+    paddingVertical: 14, marginBottom: 16,
+  },
+  nudgeBtnDone: { opacity: 0.55 },
+  nudgeBtnText: { fontFamily: Fonts.sansMedium, fontSize: 14, color: Colors.cream },
 });

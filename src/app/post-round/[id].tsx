@@ -13,9 +13,10 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Avatar } from '@/components/Avatar';
 import { TopBar } from '@/components/TopBar';
 import { Colors, Fonts, Spacing } from '@/constants/theme';
-import { getRoundWithPlayers, getScores, getHoles, finalizeRound, updateRoundStatus } from '@/lib/db';
+import { getRoundWithPlayers, getScores, getTempScores, getHoles, finalizeRound, updateRoundStatus, addRoundComment } from '@/lib/db';
 import { notifyRoundsChanged } from '@/lib/roundsRefresh';
-import type { Round, RoundPlayer, Score, Hole } from '@/lib/database.types';
+import { useAuth } from '@/context/auth';
+import type { Round, RoundPlayer, Score, TempScore, Hole } from '@/lib/database.types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,14 +43,17 @@ function toParColor(diff: number): string {
   return '#b04030';
 }
 
-function calcStandings(players: RoundPlayer[], scores: Score[], holes: Hole[], totalHoles: number): Standing[] {
+function calcStandings(players: RoundPlayer[], scores: Score[], tempScores: TempScore[], holes: Hole[], totalHoles: number): Standing[] {
   const parMap: Record<number, number> = {};
   for (const h of holes) parMap[h.hole_number] = h.par;
   const defaultPar = 4;
 
   return players
     .map((p) => {
-      const playerScores = scores.filter((s) => s.player_id === p.player_id);
+      const isTemp = p.player_id == null && p.temp_player_id != null;
+      const playerScores = isTemp
+        ? tempScores.filter((s) => s.temp_player_id === p.temp_player_id)
+        : scores.filter((s) => s.player_id === p.player_id);
       const strokes = playerScores.reduce((sum, s) => sum + (s.strokes ?? 0), 0);
       const totalPar = playerScores.reduce((sum, s) => sum + (parMap[s.hole_number] ?? defaultPar), 0);
       const diff = strokes > 0 ? strokes - totalPar : 0;
@@ -110,6 +114,9 @@ export default function PostRoundScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { session } = useAuth();
+
+  const userId = session?.user.id ?? (__DEV__ ? '46bae3d3-2c18-450e-b267-f36b91a94a31' : null);
 
   const [round, setRound] = useState<(Round & { players: RoundPlayer[] }) | null>(null);
   const [standings, setStandings] = useState<Standing[]>([]);
@@ -118,28 +125,38 @@ export default function PostRoundScreen() {
 
   useEffect(() => {
     if (!id) { setLoading(false); return; }
-    Promise.all([getRoundWithPlayers(id), getScores(id), getHoles(id)]).then(([r, scores, holes]) => {
+    Promise.all([getRoundWithPlayers(id), getScores(id), getTempScores(id), getHoles(id)]).then(([r, scores, tempScores, holes]) => {
       if (!r) { setLoading(false); return; }
       setRound(r);
       const players = (r.players as RoundPlayer[]).filter((p) => p.rsvp === 'in');
-      setStandings(calcStandings(players, scores, holes, r.total_holes));
+      setStandings(calcStandings(players, scores, tempScores, holes, r.total_holes));
       setLoading(false);
     });
   }, [id]);
 
-  async function handleDone() {
-    if (!id) return;
-    setCompleting(true);
-    if (round && round.status !== 'completed') {
+  async function finalizeIfNeeded() {
+    if (!id || !round) return;
+    if (round.status !== 'completed') {
       const confirmedPlayers = (round.players as RoundPlayer[]).filter((p) => p.rsvp === 'in');
       const playerIds = confirmedPlayers.map((p) => p.player_id).filter(Boolean) as string[];
       const winnerId = standings[0]?.player?.player_id ?? null;
       await finalizeRound(id, playerIds, round.host_id, round.scheduled_at, undefined, undefined, winnerId);
-    } else if (!round || round.status !== 'completed') {
-      await updateRoundStatus(id, 'completed');
+      notifyRoundsChanged();
     }
-    notifyRoundsChanged();
+  }
+
+  async function handleDone() {
+    if (!id) return;
+    setCompleting(true);
+    await finalizeIfNeeded();
     router.replace('/' as any);
+  }
+
+  async function handlePlayAgain() {
+    if (!id) return;
+    setCompleting(true);
+    await finalizeIfNeeded();
+    router.push(`/play-again/${id}` as any);
   }
 
   if (loading) {
@@ -226,6 +243,12 @@ export default function PostRoundScreen() {
             )}
           </View>
 
+          {round.host_id === userId && (
+            <TouchableOpacity onPress={handlePlayAgain} style={s.playAgainBtn} activeOpacity={0.7} disabled={completing}>
+              <Text style={s.playAgainBtnText}>Play again with this crew →</Text>
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity onPress={handleDone} style={s.homeBtn} activeOpacity={0.7} disabled={completing}>
             <Text style={s.homeBtnText}>{completing ? 'Saving...' : 'Back to home'}</Text>
           </TouchableOpacity>
@@ -279,6 +302,12 @@ const s = StyleSheet.create({
   resultRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   resultDiff: { fontFamily: Fonts.serifMedium, fontSize: 20, minWidth: 28, textAlign: 'right' },
   resultStrokes: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted, width: 24, textAlign: 'right' },
+
+  playAgainBtn: {
+    backgroundColor: Colors.green, borderRadius: 14,
+    padding: 17, alignItems: 'center', marginBottom: 12,
+  },
+  playAgainBtnText: { fontFamily: Fonts.sansSemiBold, fontSize: 15, color: Colors.cream },
 
   homeBtn: {
     backgroundColor: Colors.card, borderRadius: 14,

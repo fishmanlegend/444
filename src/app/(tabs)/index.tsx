@@ -1,6 +1,7 @@
 import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useFocusEffect, useIsFocused, usePathname, useRootNavigationState, useRouter } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
@@ -33,6 +34,7 @@ interface CardRound extends HomeRound {
 
 const CARD_GAP = 10;
 const CARD_PADDING = 16;
+const REMATCH_SEEN_KEY = 'rematch_card_seen';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -182,6 +184,27 @@ function ReplyCard({ round, cardSize, userId, onNavigate }: {
   );
 }
 
+function RematchCard({ round, onPress, onDismiss }: { round: HomeRound; onPress: () => void; onDismiss: () => void }) {
+  const hostProfile = (round.players as any[]).find((p) => p.is_host)?.profile;
+  const hostName = hostProfile?.name ?? null;
+  return (
+    <View style={s.rematchWrap}>
+      <TouchableOpacity style={s.rematchCard} activeOpacity={0.85} onPress={onPress}>
+        <Text style={s.rematchEmoji}>🏌️</Text>
+        <View style={s.rematchBody}>
+          <Text style={s.rematchTitle} numberOfLines={1}>
+            {round.course_name ?? 'Golf Round'}{hostName ? ` with ${hostName}'s crew` : ''}
+          </Text>
+          <Text style={s.rematchSub}>Host the rematch — or bring other pals →</Text>
+        </View>
+      </TouchableOpacity>
+      <TouchableOpacity style={s.rematchDismiss} activeOpacity={0.7} onPress={onDismiss} hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+        <Text style={s.rematchDismissText}>✕</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 function EmptyState() {
   return (
     <View style={s.emptyState}>
@@ -205,6 +228,18 @@ export default function HomeScreen() {
   const [confirmed, setConfirmed] = useState<HomeRound[]>([]);
   const [awaiting, setAwaiting] = useState<HomeRound[]>([]);
   const [finished, setFinished] = useState<HomeRound[]>([]);
+  const [rematchSeen, setRematchSeen] = useState(true);
+
+  useEffect(() => {
+    SecureStore.getItemAsync(REMATCH_SEEN_KEY).then((val) => {
+      if (val === null) setRematchSeen(false);
+    });
+  }, []);
+
+  const handleRematchDismiss = async () => {
+    await SecureStore.setItemAsync(REMATCH_SEEN_KEY, '1');
+    setRematchSeen(true);
+  };
 
   const fetchSeq = useRef(0);
   const fetchRounds = useCallback(() => {
@@ -252,6 +287,17 @@ export default function HomeScreen() {
   const cardSize = Math.floor((width - CARD_PADDING * 2 - CARD_GAP) / 2);
   const isEmpty = upcomingRounds.length === 0 && awaiting.length === 0 && finished.length === 0;
 
+  const latestGuestRound = hosting.length === 0
+    ? finished
+        .filter((r) => r.host_id !== userId)
+        .sort((a, b) => {
+          if (!a.completed_at && !b.completed_at) return 0;
+          if (!a.completed_at) return 1;
+          if (!b.completed_at) return -1;
+          return new Date(b.completed_at).getTime() - new Date(a.completed_at).getTime();
+        })[0] ?? null
+    : null;
+
   function handleCardPress(round: CardRound) {
     if (round.role === 'hosting') {
       router.push(`/manage/${round.id}` as any);
@@ -271,7 +317,18 @@ export default function HomeScreen() {
         contentContainerStyle={[s.content, { paddingBottom: insets.bottom + 80 }]}
         showsVerticalScrollIndicator={false}
       >
-{isEmpty ? (
+        {latestGuestRound && !rematchSeen && (
+          <RematchCard
+            round={latestGuestRound}
+            onPress={() => {
+              handleRematchDismiss();
+              router.push(`/play-again/${latestGuestRound.id}` as any);
+            }}
+            onDismiss={handleRematchDismiss}
+          />
+        )}
+
+        {isEmpty ? (
           <EmptyState />
         ) : (
           <>
@@ -471,4 +528,34 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   emptySub: { fontFamily: Fonts.sans, fontSize: 14, color: Colors.muted },
+
+  rematchWrap: {
+    marginHorizontal: CARD_PADDING,
+    marginBottom: 20,
+  },
+  rematchCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    paddingRight: 36,
+    backgroundColor: Colors.creamLight,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.green,
+  },
+  rematchEmoji: { fontSize: 22 },
+  rematchBody: { flex: 1 },
+  rematchTitle: { fontFamily: Fonts.serifMedium, fontSize: 15, color: Colors.text, marginBottom: 2 },
+  rematchSub: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.green },
+  rematchDismiss: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rematchDismissText: { fontFamily: Fonts.sans, fontSize: 12, color: Colors.muted },
 });

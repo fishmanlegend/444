@@ -15,18 +15,20 @@ import { TopBar } from '@/components/TopBar';
 import { Colors, Fonts, Spacing } from '@/constants/theme';
 import { PRESET_IMAGES } from '@/constants/presetImages';
 import { PRESET_GIFS } from '@/constants/presetGifs';
-import { getRoundWithPlayers, getGuestRsvps, patchRound } from '@/lib/db';
+import { getRoundWithPlayers, getGuestRsvps, patchRound, getRoundComments, getPollVotes } from '@/lib/db';
 import { notifyRoundsChanged } from '@/lib/roundsRefresh';
-import type { Round, RoundPlayer, GuestRsvp, RoundFormat } from '@/lib/database.types';
+import type { Round, RoundPlayer, GuestRsvp, RoundFormat, RoundComment, PollVote } from '@/lib/database.types';
 import { useAuth } from '@/context/auth';
 import { CoverPickerModal } from '@/components/CoverPickerModal';
 
 const GOOGLE_PLACES_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY ?? '';
 
 const FORMAT_LABEL: Record<RoundFormat, string> = {
-  stroke: 'Stroke play', skins: 'Skins', stableford: 'Stableford', match: 'Match play', best_ball: 'Best ball', other: 'Other',
+  stroke: 'Stroke play', skins: 'Skins', stableford: 'Stableford', match: 'Match play',
+  best_ball: 'Best ball', other: 'Other', nassau: 'Nassau', wolf: 'Wolf',
+  nines: '9-Point', snake: 'Snake', banker: 'Banker',
 };
-const FORMATS: RoundFormat[] = ['stroke', 'match', 'stableford', 'skins', 'best_ball', 'other'];
+const FORMATS: RoundFormat[] = ['stroke', 'match', 'stableford', 'skins', 'best_ball', 'nassau', 'wolf', 'nines', 'snake', 'banker', 'other'];
 
 function getCoverSource(round: Round): string | null {
   if (!round.cover_image_id) return null;
@@ -39,6 +41,11 @@ function scorecardRoute(round: Round): string {
   if (round.format === 'stableford') return `/stableford/${round.id}`;
   if (round.format === 'match') return `/match/${round.id}`;
   if (round.format === 'best_ball') return `/best-ball/${round.id}`;
+  if (round.format === 'nassau') return `/nassau/${round.id}`;
+  if (round.format === 'wolf') return `/wolf/${round.id}`;
+  if (round.format === 'nines') return `/nines/${round.id}`;
+  if (round.format === 'snake') return `/snake/${round.id}`;
+  if (round.format === 'banker') return `/banker/${round.id}`;
   return `/scorecard/${round.id}`;
 }
 
@@ -113,6 +120,8 @@ export default function ManageScreen() {
 
   const [round, setRound] = useState<(Round & { players: RoundPlayer[] }) | null>(null);
   const [guests, setGuests] = useState<GuestRsvp[]>([]);
+  const [comments, setComments] = useState<RoundComment[]>([]);
+  const [pollVotes, setPollVotes] = useState<PollVote[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Edit state
@@ -132,13 +141,15 @@ export default function ManageScreen() {
 
   useEffect(() => {
     if (!id) return;
-    Promise.all([getRoundWithPlayers(id), getGuestRsvps(id)]).then(([r, g]) => {
+    Promise.all([getRoundWithPlayers(id), getGuestRsvps(id), getRoundComments(id), getPollVotes(id)]).then(([r, g, c, v]) => {
       if (r && profile?.id && r.host_id !== profile.id) {
         router.replace('/(tabs)');
         return;
       }
       setRound(r);
       setGuests(g);
+      setComments(c as RoundComment[]);
+      setPollVotes(v as PollVote[]);
       if (r) {
         setTitleDraft(r.title ?? '');
         setCostDraft(r.cost_cents > 0 ? String(r.cost_cents / 100) : '');
@@ -199,6 +210,11 @@ export default function ManageScreen() {
 
   const scheduledDate = round.scheduled_at ? new Date(round.scheduled_at) : new Date();
 
+  const nudgeComments = comments.filter((c) => c.body === 'wants to play again 🏌️');
+  const hasNudges = nudgeComments.length > 0;
+  const pollOptions = (round.format_config as any)?.pollOptions as string[] | undefined;
+  const hasPoll = round.poll_guests && pollOptions && pollOptions.length > 0 && !round.scheduled_at;
+
   return (
     <View style={s.root}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: Colors.green }}>
@@ -237,6 +253,61 @@ export default function ManageScreen() {
         {/* ── Drawer ── */}
         <View style={s.drawer}>
           <View style={s.handle} />
+
+          {/* ── Nudge banner ── */}
+          {hasNudges && (
+            <TouchableOpacity
+              style={s.nudgeBanner}
+              activeOpacity={0.85}
+              onPress={() => router.push(`/play-again/${round.id}` as any)}
+            >
+              <Text style={s.nudgeBannerEmoji}>🏌️</Text>
+              <View style={s.nudgeBannerBody}>
+                <Text style={s.nudgeBannerTitle}>
+                  {nudgeComments.length === 1
+                    ? `${(nudgeComments[0] as any).profile?.name ?? 'Someone'} wants to play again`
+                    : `${nudgeComments.length} players want to play again`}
+                </Text>
+                <Text style={s.nudgeBannerSub}>Tap to schedule a rematch →</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {/* ── Poll results ── */}
+          {hasPoll && pollOptions && (
+            <View style={s.pollCard}>
+              <Text style={s.pollCardTitle}>Crew availability poll</Text>
+              {pollOptions.map((opt, i) => {
+                const count = pollVotes.filter((v) => v.option_index === i).length;
+                const d = new Date(opt);
+                const label = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                const maxVotes = Math.max(1, ...pollOptions.map((_, j) => pollVotes.filter((v) => v.option_index === j).length));
+                return (
+                  <View key={i} style={[s.pollRow, i > 0 && s.pollRowBorder]}>
+                    <View style={s.pollRowLeft}>
+                      <Text style={s.pollRowLabel}>{label}</Text>
+                      <Text style={s.pollRowCount}>{count} {count === 1 ? 'vote' : 'votes'}</Text>
+                    </View>
+                    <View style={s.pollBarWrap}>
+                      <View style={[s.pollBar, { flex: count / maxVotes }]} />
+                      <View style={{ flex: 1 - count / maxVotes }} />
+                    </View>
+                    <TouchableOpacity
+                      style={s.pollLockBtn}
+                      activeOpacity={0.75}
+                      onPress={async () => {
+                        await patchRound(round.id, { scheduled_at: opt, poll_guests: false });
+                        setRound((prev) => prev ? { ...prev, scheduled_at: opt, poll_guests: false } : prev);
+                        notifyRoundsChanged();
+                      }}
+                    >
+                      <Text style={s.pollLockText}>Lock in</Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </View>
+          )}
 
           {/* Share invite */}
           <TouchableOpacity
@@ -439,19 +510,15 @@ export default function ManageScreen() {
                   onPress={() => Animated.timing(formatSlide, { toValue: 0, duration: 220, useNativeDriver: true }).start()}>
                   <Text style={s.formatBackText}>‹ Back</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[s.formatOption, s.formatOptionBorder]}
-                  onPress={() => { save({ format: 'best_ball' }); setShowFormatModal(false); formatSlide.setValue(0); }} activeOpacity={0.7}>
-                  <Text style={[s.formatOptionText, round.format === 'best_ball' && s.formatOptionActive]}>Best Ball</Text>
-                  {round.format === 'best_ball' && <Text style={s.checkmark}>✓</Text>}
-                </TouchableOpacity>
-                <TouchableOpacity style={[s.formatOption, s.formatOptionBorder]} activeOpacity={1} disabled>
-                  <Text style={s.formatOptionDim}>Practice / Range</Text>
-                  <Text style={s.formatComingSoon}>Coming soon</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={s.formatOption} activeOpacity={1} disabled>
-                  <Text style={s.formatOptionDim}>Custom</Text>
-                  <Text style={s.formatComingSoon}>Coming soon</Text>
-                </TouchableOpacity>
+                {(['best_ball', 'wolf', 'banker', 'nines', 'snake', 'stableford'] as const).map((f, i, arr) => (
+                  <TouchableOpacity key={f}
+                    style={[s.formatOption, i < arr.length - 1 && s.formatOptionBorder]}
+                    onPress={() => { save({ format: f }); setShowFormatModal(false); formatSlide.setValue(0); }}
+                    activeOpacity={0.7}>
+                    <Text style={[s.formatOptionText, round.format === f && s.formatOptionActive]}>{FORMAT_LABEL[f]}</Text>
+                    {round.format === f && <Text style={s.checkmark}>✓</Text>}
+                  </TouchableOpacity>
+                ))}
               </View>
             </View>
           </Animated.View>
@@ -611,4 +678,38 @@ const s = StyleSheet.create({
   courseModal: { flex: 1, backgroundColor: Colors.bg },
   courseInputContainer: { backgroundColor: Colors.bg, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: Colors.border },
   courseInput: { fontFamily: Fonts.sans, fontSize: 15, color: Colors.text, backgroundColor: Colors.creamLight, borderRadius: 10, paddingHorizontal: 14, height: 42 },
+
+  nudgeBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#edf5ed', borderRadius: 14,
+    borderWidth: 1, borderColor: '#b8d8b8',
+    padding: 14, marginBottom: 14,
+  },
+  nudgeBannerEmoji: { fontSize: 24 },
+  nudgeBannerBody: { flex: 1 },
+  nudgeBannerTitle: { fontFamily: Fonts.sansMedium, fontSize: 14, color: '#1e4a1e', marginBottom: 2 },
+  nudgeBannerSub: { fontFamily: Fonts.sans, fontSize: 12, color: '#4a7a4a' },
+
+  pollCard: {
+    backgroundColor: Colors.card, borderRadius: 14,
+    borderWidth: 0.5, borderColor: Colors.border,
+    paddingHorizontal: 14, marginBottom: 16,
+  },
+  pollCardTitle: {
+    fontFamily: Fonts.sansSemiBold, fontSize: 10, color: Colors.muted,
+    textTransform: 'uppercase', letterSpacing: 1.2,
+    paddingTop: 14, paddingBottom: 10,
+  },
+  pollRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, gap: 10 },
+  pollRowBorder: { borderTopWidth: 0.5, borderTopColor: Colors.border },
+  pollRowLeft: { width: 110 },
+  pollRowLabel: { fontFamily: Fonts.sansMedium, fontSize: 13, color: Colors.text },
+  pollRowCount: { fontFamily: Fonts.sans, fontSize: 11, color: Colors.muted, marginTop: 1 },
+  pollBarWrap: { flex: 1, flexDirection: 'row', height: 4, borderRadius: 2, backgroundColor: Colors.creamLight, overflow: 'hidden' },
+  pollBar: { backgroundColor: Colors.green, borderRadius: 2 },
+  pollLockBtn: {
+    backgroundColor: Colors.green, borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 6,
+  },
+  pollLockText: { fontFamily: Fonts.sansMedium, fontSize: 12, color: Colors.cream },
 });

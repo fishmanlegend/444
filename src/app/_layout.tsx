@@ -54,8 +54,15 @@ function RootNavigator() {
       <Stack.Screen name="scorecard/[id]" />
       <Stack.Screen name="skins/[id]" />
       <Stack.Screen name="stableford/[id]" />
+      <Stack.Screen name="nines/[id]" />
+      <Stack.Screen name="snake/[id]" />
+      <Stack.Screen name="nassau/[id]" />
+      <Stack.Screen name="wolf/[id]" />
+      <Stack.Screen name="banker/[id]" />
       <Stack.Screen name="post-round/[id]" />
       <Stack.Screen name="missed-connections" />
+      <Stack.Screen name="play-now" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="play-again/[id]" />
     </Stack>
   );
 }
